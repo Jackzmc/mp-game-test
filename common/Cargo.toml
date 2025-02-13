@@ -1,0 +1,10 @@
+[package]
+name = "mp-game-test-common"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+[dependencies]
+byteorder = "1.5.0"
+log = "0.4.25"
