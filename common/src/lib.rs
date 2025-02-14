@@ -1,3 +1,5 @@
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use crate::packet::{Packet, PacketBuilder};
 
 pub mod def;
@@ -17,4 +19,14 @@ pub trait PacketSerialize<T> {
     fn to_packet_builder(&self) -> PacketBuilder;
 
     fn from_packet(bytes: Packet) -> Result<T, String>;
+}
+
+pub fn setup_logger() {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::filter::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| format!("{}=trace,mp-game-test-common=trace", env!("CARGO_CRATE_NAME")).into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 }

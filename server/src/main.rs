@@ -6,7 +6,7 @@ use tokio::net::UdpSocket;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use mp_game_test_common::game::{CommonGameInstance, PlayerData};
-use mp_game_test_common::PacketSerialize;
+use mp_game_test_common::{setup_logger, PacketSerialize};
 use rand::random;
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::events_server::ServerEvent;
@@ -15,13 +15,7 @@ use crate::game::GameInstance;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::filter::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| format!("{}=trace,mp-game-test-common=trace", env!("CARGO_CRATE_NAME")).into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    setup_logger();
 
     let sock = UdpSocket::bind("0.0.0.0:3566").await?;
     let mut buf = [0; 1024];

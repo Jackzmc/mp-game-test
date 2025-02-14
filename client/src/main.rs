@@ -10,6 +10,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use mp_game_test_common::def::{Position, MAX_PLAYERS};
 use mp_game_test_common::events_client::ClientEvent;
+use mp_game_test_common::setup_logger;
 use crate::game::GameInstance;
 use crate::network::NetClient;
 
@@ -23,15 +24,12 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::filter::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| format!("{}=trace,mp-game-test-common=trace", env!("CARGO_CRATE_NAME")).into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let args =  std::env::args();
+    setup_logger();
 
-    let addr: SocketAddr = "127.0.0.1:3566".parse().unwrap();
+    let server_ip = args.skip(1).next().expect("no ip specified");
+
+    let addr: SocketAddr = server_ip.parse().expect("bad ip");
     let mut game = GameInstance::new(addr);
     game.login("Test User".to_string()).unwrap();
 
