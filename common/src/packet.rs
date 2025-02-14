@@ -1,43 +1,39 @@
 use log::trace;
 use crate::buffer::BitBuffer;
-use crate::def::ClientEvent;
+use std::fmt::Write;
 
 pub struct PacketBuilder {
-    buf: BitBuffer
+    buf: BitBuffer,
 }
 
 impl PacketBuilder {
     pub fn new(packet_type: u16) -> Self {
         let mut buf = BitBuffer::new(PACKET_HEADER_SIZE, None);
-        trace!("{:?}", buf);
-        buf.write_int(-1); // length, filled later
-        trace!("{:?}", buf);
-        buf.write_short(packet_type as i16);
-        trace!("{:?}", buf);
+        buf.write_i32(-1); // length, filled later
+        buf.write_i16(packet_type as i16);
+        buf.write_u32(0x0); //unused on server side
         Self {
-            buf
+            buf,
         }
+    }
+
+    pub fn with_auth_id(mut self, auth_id: u32) -> Self {
+        self.buf.write_u32_at(0x6, auth_id);
+        self
     }
 
     pub fn buf_mut(&mut self) -> &mut BitBuffer {
         &mut self.buf
     }
 
-    pub fn new_event(client_event: ClientEvent) {
-
-    }
-
     pub fn finalize(mut self) -> Packet {
-        trace!("{:?}", self.buf);
         let len = self.buf.len() - PACKET_HEADER_SIZE; // subtract the payload length + payload type fields
-        trace!("vec len={}, payload len field = {}", self.buf.len(), len);
-        self.buf.write_int_at(0x0, len as i32); // write the payload length
-        trace!("{:?}", self.buf);
+        self.buf.write_i32_at(0x0, len as i32); // write the payload length
         Packet::new(self.buf)
     }
 }
 
-pub const PACKET_HEADER_SIZE: usize = 6;
+pub const PACKET_HEADER_SIZE: usize = 0xA;
 
 pub struct Packet {
     buf: BitBuffer,
@@ -46,16 +42,19 @@ pub struct Packet {
 impl Packet {
     pub fn new<B: Into<BitBuffer>>(vec: B) -> Self  where BitBuffer: From<B>  {
         let mut buf = BitBuffer::from(vec);
-        // Jump cursor to payload
-        buf.set_cursor(PACKET_HEADER_SIZE).unwrap();
         Self {
             buf: buf
         }
     }
 
+    pub fn is_valid(&self) -> bool {
+        self.buf.len() > PACKET_HEADER_SIZE && self.payload_len() > 0 && self.buf.len() >= PACKET_HEADER_SIZE + self.payload_len() as usize
+        // TODO: check packet_type?
+    }
+
     // The length of the packet
     pub fn payload_len(&self) -> u32 {
-        let py_len = self.buf.peek_int_at(0) as u32;
+        let py_len = self.buf.peek_i32_at(0) as u32;
         // assert_eq!(pk_len + 4, self.buf.len() as u32, "packet len record != buffer len");
         py_len
     }
@@ -66,7 +65,11 @@ impl Packet {
     }
 
     pub fn packet_type(&self) -> u16 {
-        self.buf.peek_short_at(0x4) as u16
+        self.buf.peek_i16_at(0x4) as u16
+    }
+
+    pub fn auth_id(&self) -> u32 {
+        self.buf.peek_i32_at(0x6) as u32
     }
 
     pub fn buf_mut(&mut self) -> &mut BitBuffer {
@@ -84,6 +87,22 @@ impl Packet {
     pub fn payload_buf(&self) -> BitBuffer {
         let end = PACKET_HEADER_SIZE + self.payload_len() as usize;
         self.buf.slice(PACKET_HEADER_SIZE as usize, end)
+    }
+
+    pub fn as_hex_str(&self) -> String {
+        let mut s = String::with_capacity((self.buf_len() + 4) as usize);
+
+        let header_buf = self.buf.slice(0, PACKET_HEADER_SIZE);
+        let payload_buf = self.payload_buf();
+        write!(s,"[{}]0x", self.buf_len()).unwrap();
+        for i in 0..PACKET_HEADER_SIZE {
+            write!(s, "{:02X}", header_buf.peek_u8_at(i)).unwrap();
+        }
+        write!(s, " ").unwrap();
+        for i in 0..self.payload_len() as usize {
+            write!(s, "{:02X}", payload_buf.peek_u8_at(i)).unwrap();
+        }
+        s
     }
 }
 

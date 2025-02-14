@@ -10,3 +10,5 @@ tokio = { version = "1.43.0", features = ["full"] }
 log = "0.4.25"
 tracing-subscriber = {  version = "0.3.19", features = ["env-filter"] }
 mp-game-test-common = { path = "../common" }
+rand = "0.9.0"
+anyhow = "1.0.95"

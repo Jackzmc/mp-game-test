@@ -2,7 +2,7 @@ use std::ffi::{CStr, FromBytesUntilNulError};
 use std::fmt::{Debug, Formatter};
 use std::io::{Cursor};
 use std::ops::Range;
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::packet::Packet;
 use std::fmt::Write;
 
@@ -63,62 +63,89 @@ impl BitBuffer {
         Ok(())
     }
 
-    pub fn write_byte(&mut self, value: i8) {
+    pub fn write_i8(&mut self, value: i8) {
         self.vec.push(value as u8);
         self.cursor += 1;
     }
 
-    pub fn write_byte_at(&mut self, offset: usize, value: i8) {
+    pub fn write_i8_at(&mut self, offset: usize, value: i8) {
         self.vec[offset] = value as u8;
     }
 
-    pub fn write_short(&mut self, value: i16) {
-        for b in value.to_le_bytes() {
-            self.write_byte(b as i8);
-        }
+    pub fn write_u8(&mut self, value: u8) {
+        self.vec.push(value);
+        self.cursor += 1;
     }
 
-    pub fn write_short_at(&mut self, offset: usize, value: i16) {
-        let mut offset = offset;
+    pub fn write_u8_at(&mut self, offset: usize, value: u8) {
+        self.vec[offset] = value;
+    }
+
+    pub fn write_i16(&mut self, value: i16) {
+        self.vec.write_i16::<LittleEndian>(value).unwrap();
+    }
+
+    pub fn write_i16_at(&mut self, mut offset: usize, value: i16) {
         for b in value.to_le_bytes() {
-            self.write_byte_at(offset, b as i8);
+            self.write_i8_at(offset, b as i8);
             offset += 1;
         }
     }
 
-    pub fn write_int(&mut self, value: i32) {
-        for b in value.to_le_bytes() {
-            self.write_byte(b as i8);
-        }
+    pub fn write_u16(&mut self, value: u16) {
+        self.vec.write_u16::<LittleEndian>(value).unwrap();
     }
 
-    pub fn write_int_at(&mut self, offset: usize, value: i32) {
-        let mut offset = offset;
+    pub fn write_u16_at(&mut self, mut offset: usize, value: u16) {
+        self.vec.reserve(2);
         for b in value.to_le_bytes() {
-            self.write_byte_at(offset, b as i8);
+            self.write_u8_at(offset, b);
             offset += 1;
         }
     }
 
-    pub fn write_float(&mut self, value: f32) {
+    pub fn write_i32(&mut self, value: i32) {
+        self.vec.write_i32::<LittleEndian>(value).unwrap();
+    }
+
+    pub fn write_i32_at(&mut self, mut offset: usize, value: i32) {
+        self.vec.reserve(4);
         for b in value.to_le_bytes() {
-            self.write_byte(b as i8);
+            self.write_i8_at(offset, b as i8);
+            offset += 1;
         }
     }
 
-    pub fn write_float_at(&mut self, offset: usize, value: f32) {
-        let mut offset = offset;
+    pub fn write_u32(&mut self, value: u32) {
+        self.vec.write_u32::<LittleEndian>(value).unwrap();
+    }
+
+    pub fn write_u32_at(&mut self, mut offset: usize, value: u32) {
+        self.vec.reserve(4);
         for b in value.to_le_bytes() {
-            self.write_byte_at(offset, b as i8);
+            self.write_i8_at(offset, b as i8);
+            offset += 1;
+        }
+    }
+
+    pub fn write_f32(&mut self, value: f32) {
+        self.vec.write_f32::<LittleEndian>(value).unwrap();
+    }
+
+    pub fn write_f32_at(&mut self, mut offset: usize, value: f32) {
+        self.vec.reserve(4);
+        for b in value.to_le_bytes() {
+            self.write_i8_at(offset, b as i8);
             offset += 1;
         }
     }
 
     pub fn write_string(&mut self, str: &str) {
+        self.vec.reserve(str.len() + 1);
         for b in str.bytes() {
-            self.write_byte(b as i8);
+            self.write_i8(b as i8);
         }
-        self.write_byte(0x0);
+        self.write_i8(0x0);
     }
 
     pub fn len(&self) -> usize {
@@ -137,43 +164,73 @@ impl BitBuffer {
         self.cursor < self.vec.len()
     }
 
-    pub fn read_byte(&mut self) -> i8 {
-        let v = self.vec[self.cursor] as i8;
+    pub fn read_i8(&mut self) -> i8 {
+        let v = self.peek_i8_at(self.cursor);
         self.cursor += 1;
         v
     }
 
-    pub fn peek_byte_at(&self, offset: usize) -> i8 {
-        self.vec[offset] as i8
+    pub fn peek_i8_at(&self, offset: usize) -> i8 {
+        self._buf_cursor(offset).read_i8().unwrap()
     }
 
-    pub fn read_short(&mut self) -> i16 {
-        let val = self.peek_short_at(self.cursor);
+    pub fn read_u8(&mut self) -> u8 {
+        let v = self.peek_u8_at(self.cursor);
+        self.cursor += 1;
+        v
+    }
+
+    pub fn peek_u8_at(&self, offset: usize) -> u8 {
+        self._buf_cursor(offset).read_u8().unwrap()
+    }
+
+    pub fn read_i16(&mut self) -> i16 {
+        let val = self.peek_i16_at(self.cursor);
         self.cursor += 2;
         val
     }
 
-    pub fn peek_short_at(&self, offset: usize) -> i16 {
+    pub fn peek_i16_at(&self, offset: usize) -> i16 {
         self._buf_cursor(offset).read_i16::<LittleEndian>().unwrap()
     }
 
-    pub fn read_int(&mut self) -> i32 {
-        let val = self.peek_int_at(self.cursor);
+    pub fn peek_u16_at(&self, offset: usize) -> u16 {
+        self._buf_cursor(offset).read_u16::<LittleEndian>().unwrap()
+    }
+
+    pub fn read_u16(&mut self) -> u16 {
+        let val = self.peek_u16_at(self.cursor);
+        self.cursor += 2;
+        val
+    }
+
+    pub fn read_i32(&mut self) -> i32 {
+        let val = self.peek_i32_at(self.cursor);
         self.cursor += 4;
         val
     }
 
-    pub fn peek_int_at(&self, offset: usize) -> i32 {
+    pub fn peek_i32_at(&self, offset: usize) -> i32 {
         self._buf_cursor(offset).read_i32::<LittleEndian>().unwrap()
     }
 
-    pub fn read_float(&mut self) -> f32 {
-        let val = self.peek_float_at(self.cursor);
+    pub fn read_u32(&mut self) -> u32 {
+        let val = self.peek_u32_at(self.cursor);
         self.cursor += 4;
         val
     }
 
-    pub fn peek_float_at(&self, offset: usize) -> f32 {
+    pub fn peek_u32_at(&self, offset: usize) -> u32 {
+        self._buf_cursor(offset).read_u32::<LittleEndian>().unwrap()
+    }
+
+    pub fn read_f32(&mut self) -> f32 {
+        let val = self.peek_f32_at(self.cursor);
+        self.cursor += 4;
+        val
+    }
+
+    pub fn peek_f32_at(&self, offset: usize) -> f32 {
         self._buf_cursor(offset).read_f32::<LittleEndian>().unwrap()
     }
 
