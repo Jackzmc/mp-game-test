@@ -1,6 +1,8 @@
 use log::trace;
 use crate::buffer::BitBuffer;
 use std::fmt::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
+use crate::unix_timestamp;
 
 pub struct PacketBuilder {
     buf: BitBuffer,
@@ -11,14 +13,22 @@ impl PacketBuilder {
         let mut buf = BitBuffer::new(PACKET_HEADER_SIZE, None);
         buf.write_i32(-1); // length, filled later
         buf.write_i16(packet_type as i16);
+        buf.write_u32(unix_timestamp());
         buf.write_u32(0x0); //unused on server side
         Self {
             buf,
         }
     }
 
+    // Sets the auth id (defaults to 0)
     pub fn with_auth_id(mut self, auth_id: u32) -> Self {
-        self.buf.write_u32_at(0x6, auth_id);
+        self.buf.write_u32_at(0xA, auth_id);
+        self
+    }
+
+    /// Replaces default timestamp (of when new() called), with a specific timestamp
+    pub fn with_timestamp(mut self, timestamp: u64) -> Self {
+        self.buf.write_u32_at(0x6, timestamp as u32);
         self
     }
 
@@ -33,7 +43,7 @@ impl PacketBuilder {
     }
 }
 
-pub const PACKET_HEADER_SIZE: usize = 0xA;
+pub const PACKET_HEADER_SIZE: usize = 0xE;
 
 pub struct Packet {
     buf: BitBuffer,
@@ -65,11 +75,15 @@ impl Packet {
     }
 
     pub fn packet_type(&self) -> u16 {
-        self.buf.peek_i16_at(0x4) as u16
+        self.buf.peek_u16_at(0x4)
+    }
+
+    pub fn timestamp(&self) -> u32 {
+        self.buf.peek_u32_at(0x6)
     }
 
     pub fn auth_id(&self) -> u32 {
-        self.buf.peek_i32_at(0x6) as u32
+        self.buf.peek_u32_at(0xA)
     }
 
     pub fn buf_mut(&mut self) -> &mut BitBuffer {
@@ -86,7 +100,7 @@ impl Packet {
 
     pub fn payload_buf(&self) -> BitBuffer {
         let end = PACKET_HEADER_SIZE + self.payload_len() as usize;
-        self.buf.slice(PACKET_HEADER_SIZE as usize, end)
+        self.buf.slice(PACKET_HEADER_SIZE, end)
     }
 
     pub fn as_hex_str(&self) -> String {

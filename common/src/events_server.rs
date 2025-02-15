@@ -5,9 +5,9 @@ use crate::PacketSerialize;
 
 #[derive(Debug)]
 pub enum ServerEvent {
-    Login { client_id: u32, auth_id: u32 }, // 0x0
-    PlayerSpawn { client_id: u32, name: String, position: Position },
-    Move { client_id: u32, position: Position }, // ox1
+    Login { client_id: u32, auth_id: u32 }, // 0x1
+    Move { client_id: u32, position: Position }, // 0x2
+    PlayerSpawn { client_id: u32, name: String, position: Position }, //0x3
 }
 impl ServerEvent {
     pub fn get_packet_type(&self) -> u16 {
@@ -15,6 +15,13 @@ impl ServerEvent {
             ServerEvent::Login { .. } => 0x1,
             ServerEvent::Move { .. } => 0x2,
             ServerEvent::PlayerSpawn { .. } => 0x3
+        }
+    }
+    pub fn is_reliable(&self) -> bool {
+        match self {
+            ServerEvent::Login { .. } => true,
+            ServerEvent::PlayerSpawn { .. } => true,
+            ServerEvent::Move { .. } => false
         }
     }
 }
@@ -48,7 +55,7 @@ impl PacketSerialize<ServerEvent> for ServerEvent {
     }
 
     // For client parsing
-    fn from_packet(mut packet: Packet) -> Result<Self, String> {
+    fn from_packet(mut packet: &Packet) -> Result<Self, String> {
         let len = packet.payload_len();
         let pk_type = packet.packet_type();
         let mut buf = packet.payload_buf();

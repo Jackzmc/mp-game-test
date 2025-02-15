@@ -10,6 +10,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use mp_game_test_common::def::{Position, MAX_PLAYERS};
 use mp_game_test_common::events_client::ClientEvent;
+use mp_game_test_common::game::Action;
 use mp_game_test_common::setup_logger;
 use crate::game::GameInstance;
 use crate::network::NetClient;
@@ -34,6 +35,12 @@ async fn main() {
     game.login("Test User".to_string()).unwrap();
 
     let mut pos = Position::new(0.0, 0.0, 0.0);
+    while !game.is_authenticated() {
+        if let Some(event) = game.net.next_event() {
+            debug!("got event, processing: {:?}", event);
+            game.process_event(event);
+        }
+    }
 
     loop {
         // Check if there's any event to process
@@ -50,11 +57,9 @@ async fn main() {
         draw_text(&game.net.event_queue_len().to_string(), 20.0, 20.0, 20.0, DARKGRAY);
 
         // TODO: draw players
-        for i in 0..MAX_PLAYERS {
-            if let Some(player) = &game.game.players[i] {
+        for i in 0..MAX_PLAYERS {if let Some(player) = &game.game.players[i] {
                 draw_rectangle(player.position.x, player.position.y, 80.0, 80.0, BLACK);
-            }
-        }
+            }}
         for i in 0..MAX_PLAYERS {
             if let Some(player) = &game.game.players[i] {
                 draw_text(&player.name, player.position.x, player.position.y - 2.0, 12.0, RED);
@@ -62,30 +67,18 @@ async fn main() {
         }
 
         // TODO: get player pos mut
-        if game.is_authenticated() {
-            if is_key_pressed(KeyCode::W) {
-                pos.y -= 1.0;
-                if pos.y < 0.0 {
-                    pos.y = 0.0;
-                }
-                let ev_move = ClientEvent::Move {
-                    position: pos
-                };
-                trace!("{:?}", pos);
-                let auth_id = game.auth_id().unwrap();
-                game.send(&ev_move).unwrap();
+        if let Some(player) = game.player_mut() {
+            if is_key_down(KeyCode::W) {
+                game.perform_action(Action::Forward);
             }
-            if is_key_pressed(KeyCode::S) {
-                pos.y += 1.0;
-                if pos.y > screen_height() {
-                    pos.y = screen_height();
-                }
-                let ev_move = ClientEvent::Move {
-                    position: pos
-                };
-                trace!("{:?}", pos);
-                let auth_id = game.auth_id().unwrap();
-                game.send(&ev_move).unwrap();
+            if is_key_down(KeyCode::S) {
+                game.perform_action(Action::Backward);
+            }
+            if is_key_down(KeyCode::A) {
+                game.perform_action(Action::Left);
+            }
+            if is_key_down(KeyCode::D) {
+                game.perform_action(Action::Right);
             }
         }
 

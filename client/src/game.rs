@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use log::{debug, trace};
 use mp_game_test_common::events_client::ClientEvent;
-use mp_game_test_common::game::{CommonGameInstance, PlayerData};
+use mp_game_test_common::game::{Action, CommonGameInstance, PlayerData};
 use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::{PacketSerialize, PACKET_PROTOCOL_VERSION};
 use crate::network::NetClient;
@@ -36,12 +36,33 @@ impl GameInstance {
         debug!("LOGIN client id = {}, auth_id = {}", client_id, auth_id);
     }
 
+    /// Returns our player instance
+    pub fn player(&self) -> Option<&PlayerData> {
+        self.client_id.and_then(|client_id| self.game.players[client_id as usize].as_ref())
+    }
+
+    pub fn player_mut(&mut self) -> Option<&mut PlayerData> {
+        self.client_id.and_then(|client_id| self.game.players[client_id as usize].as_mut())
+    }
+
     pub fn login(&self, name: String) -> Result<(), String> {
         let event = ClientEvent::Login {
             version: PACKET_PROTOCOL_VERSION,
             name: name
         };
         self.send(&event).map(|_| ())
+    }
+
+    pub fn perform_action(&mut self, action: Action) -> Result<(), String> {
+        // Perform the action locally:
+        let player = self.player_mut().ok_or("player not active")?;
+        player.process_action(action);
+
+        // Tell the server:
+        let event = ClientEvent::PerformAction {
+            action
+        };
+        self.send(&event)
     }
 
     pub fn send(&self, event: &ClientEvent) -> Result<(), String> {
@@ -60,7 +81,8 @@ impl GameInstance {
             }
             ServerEvent::PlayerSpawn { client_id, name, position } => {
                 trace!("new player \"{}\" client id {}", name, client_id);
-                self.game.init_player(client_id, name, position);
+                let player = PlayerData::new(client_id, name, position);
+                self.game.set_player(client_id, Some(player));
             }
             ServerEvent::Move { client_id, position } => {
                 if let Some(player) = self.game.get_player_mut(client_id) {

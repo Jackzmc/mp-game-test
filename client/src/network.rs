@@ -1,6 +1,7 @@
+use std::collections::VecDeque;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvError, Sender};
 use std::thread;
 use log::{debug, error, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
@@ -17,13 +18,13 @@ pub struct NetClient {
     recv_thread: thread::JoinHandle<()>
 }
 
-type EventQueue = Arc<Mutex<Vec<ServerEvent>>>;
+type EventQueue = Arc<Mutex<VecDeque<ServerEvent>>>;
 
 impl NetClient  {
     pub fn new(addr: SocketAddr) -> Self  {
         // socket.set_nonblocking(false);
         let (tx, rx) = channel::<Packet>();
-        let event_queue = Arc::new(Mutex::new(vec![]));
+        let event_queue = Arc::new(Mutex::new(VecDeque::new()));
         let mut socket = UdpSocket::bind("0.0.0.0:0").unwrap();
         socket.connect(addr).unwrap();
         socket.set_nonblocking(false).unwrap();
@@ -59,7 +60,7 @@ impl NetClient  {
     /// Pops the next event off, if any
     pub fn next_event(&mut self) -> Option<ServerEvent> {
         let mut lock = self.event_queue.lock().unwrap();
-        lock.pop()
+        lock.pop_front()
     }
 }
 
@@ -74,10 +75,10 @@ pub fn network_recv_thread(socket: UdpSocket, mut event_queue: EventQueue) {
                     trace!("IN n={} {:?}", n, &buf[0..n]);
                     let mut lock = event_queue.lock().unwrap();
                     let pk = Packet::from(buf.as_slice());
-                    match ServerEvent::from_packet(pk) {
+                    match ServerEvent::from_packet(&pk) {
                         Ok(ev) => {
                             trace!("received event, pushing to queue");
-                            lock.push(ev);
+                            lock.push_back(ev);
                         }
                         Err(err) => {
                             warn!("bad packet: {:?}", err);
@@ -94,14 +95,12 @@ pub fn network_recv_thread(socket: UdpSocket, mut event_queue: EventQueue) {
 pub fn network_send_thread(socket: UdpSocket, mut transmit_recv: Receiver<Packet>) {
     loop {
         // Check if there's any data we need to send out
-        match transmit_recv.recv() {
-            Ok(pk) => {
-                trace!("OUT pk_len={} py_len={} {}", pk.buf_len(), pk.payload_len(), pk.as_hex_str());
-                socket.send(pk.as_slice()).unwrap();
-            }
-            Err(err) => {
-                error!("[net] recv error: {}", err)
-            }
+        if let Ok(pk) = transmit_recv.recv() {
+            trace!("OUT pk_len={} py_len={} {}", pk.buf_len(), pk.payload_len(), pk.as_hex_str());
+            socket.send(pk.as_slice()).unwrap();
+        } else {
+            debug!("send_thread: channel closed, exiting");
+            break;
         }
     }
 }

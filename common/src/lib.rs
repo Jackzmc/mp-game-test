@@ -1,3 +1,4 @@
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use crate::packet::{Packet, PacketBuilder};
@@ -18,7 +19,11 @@ pub trait PacketSerialize<T> {
 
     fn to_packet_builder(&self) -> PacketBuilder;
 
-    fn from_packet(bytes: Packet) -> Result<T, String>;
+    fn from_packet(bytes: &Packet) -> Result<T, String>;
+}
+
+pub fn unix_timestamp() -> u32 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32
 }
 
 pub fn setup_logger() {

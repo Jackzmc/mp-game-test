@@ -11,7 +11,7 @@ use rand::random;
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::packet::Packet;
-use crate::game::GameInstance;
+use crate::game::{GameInstance, PacketResponse};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,8 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         let auth_id = packet.auth_id();
-        if let Ok(event) = ClientEvent::from_packet(packet) {
-            if let Err(e) = game.process_event(addr, auth_id, event).await {
+        if let Ok(event) = ClientEvent::from_packet(&packet) {
+            if let PacketResponse::Error(e) = game.process_event(addr, &packet, event).await {
                 error!("[{:?}] Process event failed: {:?}", addr, e);
             }
         }

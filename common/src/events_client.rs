@@ -1,18 +1,19 @@
 use log::trace;
 use crate::def::Position;
+use crate::game::Action;
 use crate::packet::{Packet, PacketBuilder};
 use crate::PacketSerialize;
 
 #[derive(Debug)]
 pub enum ClientEvent {
     Login { version: u32, name: String }, // 0x0
-    Move { position: Position }, // ox1
+    PerformAction { action: Action }, // ox1
 }
 impl ClientEvent {
     pub fn get_packet_type(&self) -> u16 {
         match self {
             ClientEvent::Login { .. } => 0x1,
-            ClientEvent::Move { .. } => 0x2
+            ClientEvent::PerformAction { .. } => 0x2
         }
     }
 }
@@ -26,17 +27,15 @@ impl PacketSerialize<ClientEvent> for ClientEvent {
                 buf.write_u32(*version);
                 buf.write_string(name);
             },
-            ClientEvent::Move { position } => {
+            ClientEvent::PerformAction { action } => {
                 let buf = pk.buf_mut();
-                buf.write_f32(position.x);
-                buf.write_f32(position.y);
-                buf.write_f32(position.z);
+                buf.write_u32(action.bits());
             }
         }
         pk
     }
     // For the server to parse
-    fn from_packet(mut packet: Packet) -> Result<Self, String> {
+    fn from_packet(mut packet: &Packet) -> Result<Self, String> {
         let len = packet.payload_len();
         let pk_type = packet.packet_type();
         let mut buf = packet.payload_buf();
@@ -50,12 +49,8 @@ impl PacketSerialize<ClientEvent> for ClientEvent {
             },
             0x2 => {
                 trace!("reading 0x2: Client Move");
-                Ok(ClientEvent::Move {
-                    position: Position::new(
-                        buf.read_f32(),
-                        buf.read_f32(),
-                        buf.read_f32()
-                    )
+                Ok(ClientEvent::PerformAction {
+                    action: Action::from_bits_retain(buf.read_u32()),
                 })
             },
             _ => {
