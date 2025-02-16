@@ -11,6 +11,7 @@ pub struct GameInstance {
     pub net: NetClient,
     client_id: Option<u32>,
     auth_id: Option<u32>,
+    actions: Action
 }
 impl GameInstance {
     pub fn new(addr: SocketAddr) -> Self {
@@ -19,6 +20,7 @@ impl GameInstance {
             net: NetClient::new(addr),
             client_id: None,
             auth_id: None,
+            actions: Action::empty()
         }
     }
     pub fn client_id(&self) -> Option<u32> {
@@ -53,14 +55,14 @@ impl GameInstance {
         self.send(&event).map(|_| ())
     }
 
-    pub fn perform_action(&mut self, action: Action) -> Result<(), String> {
-        // Perform the action locally:
-        let player = self.player_mut().ok_or("player not active")?;
-        player.process_action(action);
+    pub fn has_action(&self, action: Action) -> bool {
+        self.actions.contains(action)
+    }
 
-        // Tell the server:
+    pub fn set_action(&mut self, action: Action, value: bool) -> Result<(), String> {
+        self.actions.set(action, value);
         let event = ClientEvent::PerformAction {
-            action
+            actions: self.actions
         };
         self.send(&event)
     }
@@ -75,7 +77,7 @@ impl GameInstance {
 
     pub fn process_event(&mut self, event: ServerEvent) {
         match event {
-            ServerEvent::Login { client_id, auth_id } => {
+            ServerEvent::Login { client_index: client_id, auth_id } => {
                 assert_eq!(self.is_authenticated(), false, "received login data when already authenticated");
                 self._on_login(client_id, auth_id);
             }

@@ -18,6 +18,8 @@ pub struct NetClient {
     recv_thread: thread::JoinHandle<()>
 }
 
+
+
 type EventQueue = Arc<Mutex<VecDeque<ServerEvent>>>;
 
 impl NetClient  {
@@ -27,7 +29,7 @@ impl NetClient  {
         let event_queue = Arc::new(Mutex::new(VecDeque::new()));
         let mut socket = UdpSocket::bind("0.0.0.0:0").unwrap();
         socket.connect(addr).unwrap();
-        socket.set_nonblocking(false).unwrap();
+        // socket.set_nonblocking(false).unwrap();
         debug!("connect to {:?} from {:?}", addr, socket.local_addr().unwrap());
         let recv_thread = {
             let event_queue = event_queue.clone();

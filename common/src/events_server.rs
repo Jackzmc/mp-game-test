@@ -3,9 +3,9 @@ use crate::def::Position;
 use crate::packet::{Packet, PacketBuilder};
 use crate::PacketSerialize;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ServerEvent {
-    Login { client_id: u32, auth_id: u32 }, // 0x1
+    Login { client_index: u32, auth_id: u32 }, // 0x1
     Move { client_id: u32, position: Position }, // 0x2
     PlayerSpawn { client_id: u32, name: String, position: Position }, //0x3
 }
@@ -30,7 +30,7 @@ impl PacketSerialize<ServerEvent> for ServerEvent {
     fn to_packet_builder(&self) -> PacketBuilder {
         let mut pk = PacketBuilder::new(self.get_packet_type());
         match self {
-            ServerEvent::Login { client_id, auth_id } => {
+            ServerEvent::Login { client_index: client_id, auth_id } => {
                 let buf = pk.buf_mut();
                 buf.write_u32(*client_id);
                 buf.write_u32(*auth_id);
@@ -63,7 +63,7 @@ impl PacketSerialize<ServerEvent> for ServerEvent {
             0x1 => {
                 trace!("reading 0x1: Server Connect");
                 Ok(ServerEvent::Login {
-                    client_id: buf.read_u32(),
+                    client_index: buf.read_u32(),
                     auth_id: buf.read_u32(),
                 })
             },

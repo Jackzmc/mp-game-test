@@ -10,7 +10,8 @@ pub struct PlayerData{
     pub position: Position,
     pub name: String,
     pub client_id: u32,
-    pub state: PlayerState
+    pub state: PlayerState,
+    pub actions: Action
 }
 
 pub trait ClientData {
@@ -48,7 +49,8 @@ impl PlayerData {
             position,
             name,
             client_id,
-            state: PlayerState::default()
+            state: PlayerState::default(),
+            actions: Action::empty()
         }
     }
     pub fn get_spawn_event(&self) -> ServerEvent {
@@ -59,30 +61,30 @@ impl PlayerData {
         }
     }
 
-    pub fn process_action(&mut self, action: Action) -> bool {
+    pub fn process_actions(&mut self) -> bool {
         let mut changed = false;
-        if action.contains(Action::Forward) {
+        if self.actions.contains(Action::Forward) {
             self.position.y -= 1.0;
             if self.position.y < 0.0 {
                 self.position.y = 0.0;
             }
             changed = true;
         }
-        if action.contains(Action::Backward) {
+        if self.actions.contains(Action::Backward) {
             self.position.y += 1.0;
             if self.position.y > 1000.0 {
                 self.position.y = 1000.0;
             }
             changed = true;
         }
-        if action.contains(Action::Left) {
+        if self.actions.contains(Action::Left) {
             self.position.x -= 1.0;
             if self.position.x < 0.0 {
                 self.position.x = 0.0;
             }
             changed = true;
         }
-        if action.contains(Action::Right) {
+        if self.actions.contains(Action::Right) {
             self.position.x += 1.0;
             if self.position.x > 1000.0 {
                 self.position.x = 1000.0;

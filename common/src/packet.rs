@@ -21,8 +21,16 @@ impl PacketBuilder {
     }
 
     // Sets the auth id (defaults to 0)
+    // Note: This field conflicts with sequence_number, auth id is only for outgoing client packets
     pub fn with_auth_id(mut self, auth_id: u32) -> Self {
         self.buf.write_u32_at(0xA, auth_id);
+        self
+    }
+
+    // Sets the sequence number.
+    // Note: This field conflicts with auth_id, seq number is only for outgoing server packets
+    pub fn with_sequence_number(mut self, seq_num: u32) -> Self {
+        self.buf.write_u32_at(0xA, seq_num);
         self
     }
 

@@ -6,12 +6,14 @@ use crate::PacketSerialize;
 
 #[derive(Debug)]
 pub enum ClientEvent {
+    Ack { seq_number: u16 },
     Login { version: u32, name: String }, // 0x0
-    PerformAction { action: Action }, // ox1
+    PerformAction { actions: Action }, // ox1
 }
 impl ClientEvent {
     pub fn get_packet_type(&self) -> u16 {
         match self {
+            ClientEvent::Ack { .. }  => 0x0,
             ClientEvent::Login { .. } => 0x1,
             ClientEvent::PerformAction { .. } => 0x2
         }
@@ -22,14 +24,18 @@ impl PacketSerialize<ClientEvent> for ClientEvent {
     fn to_packet_builder(&self) -> PacketBuilder {
         let mut pk = PacketBuilder::new(self.get_packet_type());
         match self {
+            ClientEvent::Ack { seq_number } => {
+                let buf = pk.buf_mut();
+                buf.write_u16(*seq_number);
+            }
             ClientEvent::Login { version, name } => {
                 let buf = pk.buf_mut();
                 buf.write_u32(*version);
                 buf.write_string(name);
             },
-            ClientEvent::PerformAction { action } => {
+            ClientEvent::PerformAction { actions } => {
                 let buf = pk.buf_mut();
-                buf.write_u32(action.bits());
+                buf.write_u32(actions.bits());
             }
         }
         pk
@@ -40,6 +46,12 @@ impl PacketSerialize<ClientEvent> for ClientEvent {
         let pk_type = packet.packet_type();
         let mut buf = packet.payload_buf();
         match pk_type {
+            0x0 => {
+                trace!("reading 0x0: Ack");
+                Ok(ClientEvent::Ack {
+                    seq_number: buf.read_u16()
+                })
+            },
             0x1 => {
                 trace!("reading 0x1: Client Login");
                 Ok(ClientEvent::Login {
@@ -50,7 +62,7 @@ impl PacketSerialize<ClientEvent> for ClientEvent {
             0x2 => {
                 trace!("reading 0x2: Client Move");
                 Ok(ClientEvent::PerformAction {
-                    action: Action::from_bits_retain(buf.read_u32()),
+                    actions: Action::from_bits_retain(buf.read_u32()),
                 })
             },
             _ => {
