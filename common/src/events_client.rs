@@ -9,13 +9,15 @@ pub enum ClientEvent {
     Ack { seq_number: u16 },
     Login { version: u32, name: String }, // 0x0
     PerformAction { actions: Action }, // ox1
+    Disconnect { reason: String},
 }
 impl ClientEvent {
     pub fn get_packet_type(&self) -> u16 {
         match self {
             ClientEvent::Ack { .. }  => 0x0,
             ClientEvent::Login { .. } => 0x1,
-            ClientEvent::PerformAction { .. } => 0x2
+            ClientEvent::PerformAction { .. } => 0x2,
+            ClientEvent::Disconnect { .. } => 0x3
         }
     }
 }
@@ -36,6 +38,10 @@ impl PacketSerialize<ClientEvent> for ClientEvent {
             ClientEvent::PerformAction { actions } => {
                 let buf = pk.buf_mut();
                 buf.write_u32(actions.bits());
+            },
+            ClientEvent::Disconnect { reason } => {
+                let buf = pk.buf_mut();
+                buf.write_string(reason);
             }
         }
         pk
@@ -63,6 +69,12 @@ impl PacketSerialize<ClientEvent> for ClientEvent {
                 trace!("reading 0x2: Client Move");
                 Ok(ClientEvent::PerformAction {
                     actions: Action::from_bits_retain(buf.read_u32()),
+                })
+            },
+            0x3 => {
+                trace!("reading 0x3: Client Disconnect");
+                Ok(ClientEvent::Disconnect {
+                    reason: buf.read_string().unwrap()
                 })
             },
             _ => {

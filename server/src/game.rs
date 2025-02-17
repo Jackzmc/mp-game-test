@@ -109,7 +109,7 @@ impl GameInstance {
                 if player.process_actions() {
                     trace!("change made, sending update");
                     let move_event = ServerEvent::Move {
-                        client_id: player.client_id,
+                        client_index: player.client_index,
                         position: player.position,
                     };
                     self.broadcast(move_event).await;
@@ -133,24 +133,20 @@ impl GameInstance {
             // TODO: send disconnect packet
         }
     }
-    pub fn authorize_player(&mut self, addr: SocketAddr, name: String) -> (u32, u32) {
-        for i in 0..MAX_PLAYERS {
-            if self.game.players[i].is_none() {
-                // Generate an unique auth id that should be hard to guess
-                let auth_id: u32 = random();
-                trace!("auth_id={} for new client (id={}) (ip={:?}) (name={})", auth_id, i, addr, name);
-                let player = PlayerData::new(i as u32, name, Position::zero());
+    pub fn setup_player(&mut self, addr: SocketAddr, name: String) -> (u32, u32) {
+        let client_index = self.game.get_empty_slot().expect("no available player slot");
+        // Generate an unique auth id that should be hard to guess
+        let auth_id: u32 = random();
+        trace!("auth_id={} for new client (id={}) (ip={:?}) (name={})", auth_id, client_index, addr, name);
+        let player = PlayerData::new(client_index, name, Position::zero());
 
-                self.game.set_player(i as u32, Some(player));
+        self.game.set_player(client_index, Some(player));
 
-                let client = ClientData::new(auth_id, addr);
+        let client = ClientData::new(auth_id, addr);
 
-                self.client_data[i] = Some(client);
+        self.client_data[client_index as usize] = Some(client);
 
-                return (i as u32, auth_id);
-            }
-        }
-        panic!("No available player slots");
+        (client_index, auth_id)
     }
 
     pub fn for_all_players<F>(&self, func: F) where F: Fn(u32, &ClientData) {
@@ -297,11 +293,59 @@ impl GameInstance {
         Err(anyhow!("Could not find client"))
     }
 
+    /// Process a login packet, sending necessary events and registering client/player
+    async fn _process_login_packet(&mut self, addr: SocketAddr, packet: &Packet, version: u32, name: String) -> PacketResponse {
+        if version != PACKET_PROTOCOL_VERSION {
+            warn!("Ignoring login event - invalid protocol version (theirs: {}, ours: {})", version, PACKET_PROTOCOL_VERSION);
+            return PacketResponse::Error(anyhow!("invalid protocol version (yours: {}, ours: {})", version, PACKET_PROTOCOL_VERSION));
+        }
+
+        // TODO: send_reliable broadcast_reliable
+
+        // Tell client it's auth id and player index
+        let (client_index, auth_id) = self.setup_player(addr, name.clone());
+        let login_event = ServerEvent::Login {
+            client_index,
+            auth_id,
+        };
+        let client_id = ClientId::ClientIndex(client_index);
+        self.send_to_reliable(login_event, &client_id).await.ok();
+
+        // Tell client all connected players
+        for i in 0..MAX_PLAYERS {
+            if let Some(player) = &self.game.players[i] {
+                let event = player.get_spawn_event();
+                self.send_to_reliable(event, &client_id).await.ok();
+            }
+        }
+
+        // Tell all other clients that this client connected
+        let spawn_event = self.game.players[client_index as usize].as_ref().unwrap().get_spawn_event();
+        self.broadcast_reliable(spawn_event).await;
+
+        PacketResponse::Ok
+    }
+
     pub async fn process_event(&mut self, addr: SocketAddr, packet: &Packet, event: ClientEvent) -> PacketResponse {
-        match event {
-            ClientEvent::Ack { seq_number } => {
-                if let Some((client, player)) = self.get_client_player_mut(&ClientId::Addr(addr)) {
-                    client.mark();
+        let client_id = ClientId::Addr(addr);
+        // Verify login separately - as it can't verify auth
+        if let ClientEvent::Login { version, name} = event {
+            return self._process_login_packet(addr, packet, version, name).await;
+        }
+
+        if let Some((client, player)) = self.get_client_player_mut(&client_id) {
+            // Verify the client's auth id matches for its ip
+            let auth_id = packet.auth_id();
+            if client.auth_id != auth_id {
+                warn!("dropping packet - got invalid auth id for addr. addr={} auth_id={}", addr, auth_id);
+                return PacketResponse::Discarded;
+            }
+            client.mark(); // update last packet time
+
+            match event {
+                // Handled elsewhere
+                ClientEvent::Login {..} => unreachable!(),
+                ClientEvent::Ack { seq_number } => {
                     if let Some(top) = client.reliable_queue.get(0) {
                         if top.seq_id == seq_number {
                             client.reliable_queue.pop_front();
@@ -313,55 +357,30 @@ impl GameInstance {
                     } else {
                         debug!("stray ACK, no reliable packet in queue. ignoring")
                     };
-                }
-                todo!();
-            }
-            ClientEvent::Login { version, name } => {
-                // auth_id is 0 / unused
-                if version != PACKET_PROTOCOL_VERSION {
-                    warn!("Ignoring login event - invalid protocol version (theirs: {}, ours: {})", version, PACKET_PROTOCOL_VERSION);
-                    return PacketResponse::Error(anyhow!("invalid protocol version (yours: {}, ours: {})", version, PACKET_PROTOCOL_VERSION));
-                }
-
-                // TODO: send_reliable broadcast_reliable
-
-                // Tell client it's auth id and player index
-                let (client_index, auth_id) = self.authorize_player(addr, name.clone());
-                let login_event = ServerEvent::Login {
-                    client_index,
-                    auth_id,
-                };
-                let client_id = ClientId::ClientIndex(client_index);
-                self.send_to_reliable(login_event, &client_id).await.ok();
-
-                // Tell client all connected players
-                for i in 0..MAX_PLAYERS {
-                    if let Some(player) = &self.game.players[i] {
-                        let event = player.get_spawn_event();
-                        self.send_to_reliable(event, &client_id).await.ok();
-                    }
-                }
-
-                // Tell all other clients that this client connected
-                let spawn_event = self.game.players[client_index as usize].as_ref().unwrap().get_spawn_event();
-                self.broadcast_reliable(spawn_event).await;
-            }
-            ClientEvent::PerformAction { actions } => {
-                let client_id = ClientId::AuthId(packet.auth_id());
-                if let Some((client, player)) = self.get_client_player_mut(&client_id) {
-                    client.mark();
+                },
+                ClientEvent::PerformAction { actions } => {
                     trace!("now={} pk.timestamp={} last_timestamp={}", unix_timestamp(), packet.timestamp(), client.last_timestamp);
                     if client.last_timestamp > packet.timestamp() {
                         debug!("discarding packet (last timestamp: {}) (pk timestamp: {})", client.last_timestamp, packet.timestamp());
                         return PacketResponse::Discarded;
                     }
                     client.last_timestamp = packet.timestamp();
-                    trace!("got player id={}", player.client_id);
+                    trace!("got player id={}", player.client_index);
                     player.actions = actions;
+                },
+                ClientEvent::Disconnect { reason} => {
+                    trace!("client disconnect (index={}) (reason={})", player.client_index, reason);
+                    let event = ServerEvent::Disconnect {
+                        client_index: player.client_index,
+                        reason,
+                    };
+                    self.broadcast_reliable(event).await;
                 }
             }
+            return PacketResponse::Ok
         }
-        PacketResponse::Ok
+        warn!("dropping event - failed to find client for addr {}", addr);
+        PacketResponse::Discarded
     }
 }
 

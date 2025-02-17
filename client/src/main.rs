@@ -26,36 +26,40 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    prevent_quit();
     let args = std::env::args();
     setup_logger();
 
     let server_ip = args.skip(1).next().expect("no ip specified");
 
     let addr: SocketAddr = server_ip.parse().expect("bad ip");
-    let mut game = GameInstance::new(addr);
+    let mut game = GameInstance::new();
+    game.connect(addr);
     game.login("Test User".to_string()).unwrap();
 
     let mut pos = Position::new(0.0, 0.0, 0.0);
     while !game.is_authenticated() {
-        if let Some(event) = game.net.next_event() {
+        if let Some(event) = game.net_mut().next_event() {
             debug!("got event, processing: {:?}", event);
             game.process_event(event);
         }
     }
     let mut cam = Camera2D {
         zoom: Vec2::new(1.0, screen_width() / screen_height()),
+        target: Vec2::new(-1.0, -1.0),
         ..Default::default()
     };
     debug!("starting draw loop");
-    let mut instant = Instant::now();
+    let mut instant: Option<Instant> = None;
     let mut fps_calc = FpsCounter::new();
     let mut frame: u64 = 0;
-    loop {
-        let prev_frame_time = instant.elapsed();
-        instant = Instant::now();
+    // While connected:?
+    while !is_quit_requested() {
+        let prev_frame_time = instant.map(|instant| instant.elapsed()); //instant.elapsed();
+        instant = Some(Instant::now());
 
         // Check if there's any event to process
-        if let Some(event) = game.net.next_event() {
+        if let Some(event) = game.net_mut().next_event() {
             debug!("got event, processing: {:?}", event);
             game.process_event(event);
         }
@@ -66,13 +70,13 @@ async fn main() {
         draw_line(-0.4, 0.4, -0.8, 0.9, 0.05, BLUE);
         draw_rectangle(-0.3, 0.3, 0.2, 0.2, GREEN);
         draw_rectangle(0.0, 0.0, 200.0, 200.0, GREEN);
+        draw_text("TEST", -0.2, 0.2, 0.4, RED);
 
         // TODO: draw players
         for i in 0..MAX_PLAYERS {
             if let Some(player) = &game.game.players[i] {
-                let pos = player.position;
-                // let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
-                // draw_rectangle(pos.x, pos.y, 0.1, 0.1, BLACK);
+                let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
+                draw_rectangle(pos.x, pos.y, 0.1, 0.1, BLACK);
                 // draw_cube(Vec3::new(pos.x, pos.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
                 draw_text(
                     &i.to_string(),
@@ -96,24 +100,28 @@ async fn main() {
 
         set_default_camera();
         if let Some(client_id) = game.client_id() {
+            let text = &format!("Connected. Id#{}", client_id);
+            let dim = measure_text(text, None, 20, 1.0);
             draw_text(
-                &format!("Id: {}", client_id),
-                screen_width() - 200.0,
+                text,
+                screen_width() - dim.width - 20.0,
                 20.0,
                 20.0,
                 DARKGRAY,
             );
         }
         draw_text(
-            &game.net.event_queue_len().to_string(),
+            &game.net().process_queue_len().to_string(),
             20.0,
             20.0,
             20.0,
             DARKGRAY,
         );
         if frame % 10 == 0 {
-            let fps = 1.0 / prev_frame_time.as_secs_f64();
-            fps_calc.add_fps(fps);
+            if let Some(prev_frame_time) = prev_frame_time {
+                let fps = 1.0 / prev_frame_time.as_secs_f64();
+                fps_calc.add_fps(fps);
+            }
         }
         draw_text(
             &format!("{:.0}", fps_calc.average()),
@@ -125,6 +133,7 @@ async fn main() {
         frame += 1;
         next_frame().await
     }
+    game.disconnect("Disconnect");
 }
 
 fn set_action(game: &mut GameInstance, action: Action, key_code: KeyCode) {

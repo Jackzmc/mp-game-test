@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+mp-game-test-common = { path = "../common" }
 serde = "1.0.217"
 serde_json = "1.0.138"
 tokio = { version = "1.43.0", features = ["full"] }
 log = "0.4.25"
 tracing-subscriber = {  version = "0.3.19", features = ["env-filter"] }
-mp-game-test-common = { path = "../common" }
 rand = "0.9.0"
 anyhow = "1.0.95"
+clap = { version = "4.5.30", features = ["derive"] }

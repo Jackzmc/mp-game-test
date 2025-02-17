@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Formatter};
 use bitflags::bitflags;
 use int_enum::IntEnum;
+use crate::ClientIndex;
 use crate::def::{Position, MAX_PLAYERS};
 use crate::events_server::ServerEvent;
 
@@ -9,7 +10,7 @@ pub struct PlayerData{
     // pub client: C,
     pub position: Position,
     pub name: String,
-    pub client_id: u32,
+    pub client_index: u32,
     pub state: PlayerState,
     pub actions: Action
 }
@@ -48,14 +49,14 @@ impl PlayerData {
             // client: client_data,
             position,
             name,
-            client_id,
+            client_index: client_id,
             state: PlayerState::default(),
             actions: Action::empty()
         }
     }
     pub fn get_spawn_event(&self) -> ServerEvent {
         ServerEvent::PlayerSpawn {
-            client_id: self.client_id,
+            client_index: self.client_index,
             name: self.name.clone(),
             position: self.position
         }
@@ -111,23 +112,32 @@ impl CommonGameInstance {
         }
     }
 
-    fn _check_player_id(&self, client_id: u32) {
-        assert!(client_id <= self.players.len() as u32, "client index out of bounds");
+    fn _check_player_id(&self, client_index: u32) {
+        assert!(client_index <= self.players.len() as u32, "client index out of bounds");
     }
 
-    pub fn set_player(&mut self, client_id: u32, player: Option<PlayerData>) -> &PlayerData {
-        self._check_player_id(client_id);
-        self.players[client_id as usize] = player;
-        self.players[client_id as usize].as_ref().unwrap()
+    pub fn get_empty_slot(&self) -> Option<u32> {
+        for i in 0..MAX_PLAYERS {
+            if self.players[i].is_none() {
+                return Some(i as u32)
+            }
+        }
+        None
     }
 
-    pub fn get_player(&self, client_id: u32) -> &Option<PlayerData> {
-        self._check_player_id(client_id);
-        &self.players[client_id as usize]
+    pub fn set_player(&mut self, client_index: u32, player: Option<PlayerData>) -> &PlayerData {
+        self._check_player_id(client_index);
+        self.players[client_index as usize] = player;
+        self.players[client_index as usize].as_ref().unwrap()
     }
 
-    pub fn get_player_mut(&mut self, client_id: u32) -> &mut Option<PlayerData> {
-        self._check_player_id(client_id);
-        &mut self.players[client_id as usize]
+    pub fn get_player(&self, client_index: u32) -> &Option<PlayerData> {
+        self._check_player_id(client_index);
+        &self.players[client_index as usize]
+    }
+
+    pub fn get_player_mut(&mut self, client_index: u32) -> &mut Option<PlayerData> {
+        self._check_player_id(client_index);
+        &mut self.players[client_index as usize]
     }
 }
