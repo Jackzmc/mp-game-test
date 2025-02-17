@@ -12,6 +12,7 @@ use mp_game_test_common::setup_logger;
 use std::net::SocketAddr;
 use std::sync::mpsc::channel;
 use std::thread;
+use std::time::Instant;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -42,10 +43,17 @@ async fn main() {
         }
     }
     let mut cam = Camera2D {
+        zoom: Vec2::new(1.0, screen_width() / screen_height()),
         ..Default::default()
     };
     debug!("starting draw loop");
+    let mut instant = Instant::now();
+    let mut fps_calc = FpsCounter::new();
+    let mut frame: u64 = 0;
     loop {
+        let prev_frame_time = instant.elapsed();
+        instant = Instant::now();
+
         // Check if there's any event to process
         if let Some(event) = game.net.next_event() {
             debug!("got event, processing: {:?}", event);
@@ -54,6 +62,7 @@ async fn main() {
         clear_background(WHITE);
 
         set_camera(&mut cam);
+        // draw_grid(20, 1., BLACK, GRAY);
         draw_line(-0.4, 0.4, -0.8, 0.9, 0.05, BLUE);
         draw_rectangle(-0.3, 0.3, 0.2, 0.2, GREEN);
         draw_rectangle(0.0, 0.0, 200.0, 200.0, GREEN);
@@ -61,13 +70,15 @@ async fn main() {
         // TODO: draw players
         for i in 0..MAX_PLAYERS {
             if let Some(player) = &game.game.players[i] {
-                let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
-                draw_rectangle(pos.x, pos.y, 0.1, 0.1, BLACK);
+                let pos = player.position;
+                // let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
+                // draw_rectangle(pos.x, pos.y, 0.1, 0.1, BLACK);
+                // draw_cube(Vec3::new(pos.x, pos.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
                 draw_text(
-                    &player.name,
+                    &i.to_string(),
                     pos.x,
-                    pos.y - 2.0,
-                    20.0,
+                    pos.y,
+                    0.1,
                     RED,
                 );
             }
@@ -92,14 +103,6 @@ async fn main() {
                 20.0,
                 DARKGRAY,
             );
-        } else {
-            draw_text(
-                "Authenticating...",
-                screen_width() - 200.0,
-                20.0,
-                20.0,
-                DARKGRAY,
-            );
         }
         draw_text(
             &game.net.event_queue_len().to_string(),
@@ -108,7 +111,18 @@ async fn main() {
             20.0,
             DARKGRAY,
         );
-
+        if frame % 10 == 0 {
+            let fps = 1.0 / prev_frame_time.as_secs_f64();
+            fps_calc.add_fps(fps);
+        }
+        draw_text(
+            &format!("{:.0}", fps_calc.average()),
+            40.0,
+            20.0,
+            20.0,
+            DARKGRAY,
+        );
+        frame += 1;
         next_frame().await
     }
 }
@@ -118,5 +132,31 @@ fn set_action(game: &mut GameInstance, action: Action, key_code: KeyCode) {
         game.set_action(action, true).ok();
     } else if game.has_action(action) && is_key_released(key_code) {
         game.set_action(action, false).ok();
+    }
+}
+
+const FRAME_SAMPLES: u16= 100;
+struct FpsCounter {
+    sum: f64,
+    index: u16,
+    list: [f64; FRAME_SAMPLES as usize]
+}
+impl FpsCounter {
+    pub fn new() -> Self {
+        Self {
+            sum: 0.0,
+            index: 0,
+            list: [0.0; FRAME_SAMPLES as usize],
+        }
+    }
+
+    pub fn add_fps(&mut self, fps: f64) {
+        self.sum -= self.list[self.index as usize];
+        self.sum += fps;
+        self.list[self.index as usize] = fps;
+        self.index = (self.index + 1) % FRAME_SAMPLES;
+    }
+    pub fn average(&mut self) -> f64 {
+        self.sum / FRAME_SAMPLES as f64
     }
 }

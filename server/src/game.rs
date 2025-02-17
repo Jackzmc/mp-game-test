@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use log::{debug, trace, warn};
 use rand::random;
@@ -16,12 +16,15 @@ use mp_game_test_common::def::{Position, MAX_PLAYERS};
 use crate::network::{NetServer, OutPacket};
 use crate::TICK_RATE;
 
+static CLIENT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+
 struct ClientData {
     auth_id: u32,
     addr: SocketAddr,
     last_timestamp: u32,
     seq_number: u16,
     reliable_queue: VecDeque<ReliableEntry>,
+    last_packet_time: Instant
 }
 struct ReliableEntry {
     seq_id: u16,
@@ -41,7 +44,14 @@ impl ClientData {
             last_timestamp: unix_timestamp(),
             seq_number: 0,
             reliable_queue: VecDeque::new(),
+            last_packet_time: Instant::now()
         }
+    }
+    pub fn mark(&mut self) {
+        self.last_packet_time = Instant::now();
+    }
+    pub fn has_timed_out(&self) -> bool {
+       self.last_packet_time.elapsed() > CLIENT_DISCONNECT_TIMEOUT
     }
     pub fn add_reliable_packet(&mut self, event: ServerEvent) -> u16 {
         let seq = self.seq_number;
@@ -88,6 +98,12 @@ impl GameInstance {
             self.process_event(addr, &pk, event).await;
         }
         for i in 0..MAX_PLAYERS {
+            if let Some(client) = &mut self.client_data[i] {
+                if client.has_timed_out() {
+                    self.disconnect_player(&ClientId::ClientIndex(i as u32), "Timed out".to_string());
+                    continue
+                }
+            }
             if let Some(player) = &mut self.game.players[i] {
                 // If change made, update:
                 if player.process_actions() {
@@ -107,6 +123,14 @@ impl GameInstance {
             debug!("{} ticks ran. packet count -  tx={} rx={}", self.tick_count, tx_s, rx_s);
 
             self.tick_count = 0;
+        }
+    }
+    pub fn disconnect_player(&mut self, client_id: &ClientId, reason: String) {
+        if let Some(index) = self.get_client_index(client_id) {
+            debug!("disconnecting client index. reason={}", reason);
+            self.client_data[index as usize] = None;
+            self.game.players[index as usize] = None;
+            // TODO: send disconnect packet
         }
     }
     pub fn authorize_player(&mut self, addr: SocketAddr, name: String) -> (u32, u32) {
@@ -277,6 +301,7 @@ impl GameInstance {
         match event {
             ClientEvent::Ack { seq_number } => {
                 if let Some((client, player)) = self.get_client_player_mut(&ClientId::Addr(addr)) {
+                    client.mark();
                     if let Some(top) = client.reliable_queue.get(0) {
                         if top.seq_id == seq_number {
                             client.reliable_queue.pop_front();
@@ -324,6 +349,7 @@ impl GameInstance {
             ClientEvent::PerformAction { actions } => {
                 let client_id = ClientId::AuthId(packet.auth_id());
                 if let Some((client, player)) = self.get_client_player_mut(&client_id) {
+                    client.mark();
                     trace!("now={} pk.timestamp={} last_timestamp={}", unix_timestamp(), packet.timestamp(), client.last_timestamp);
                     if client.last_timestamp > packet.timestamp() {
                         debug!("discarding packet (last timestamp: {}) (pk timestamp: {})", client.last_timestamp, packet.timestamp());
