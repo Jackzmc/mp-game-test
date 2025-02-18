@@ -180,13 +180,14 @@ pub fn network_recv_thread(
                 {
                     // This code assumes that the server will receive a regular amount of traffic so this is processed
                     // If zero clients are sending data this will stall
-                    let lock = reliable_queue.lock().unwrap();
-                    if let Some(queue) = lock.get(&addr) {
-                        if let Some(item) = queue.front() {
+                    let mut lock = reliable_queue.lock().unwrap();
+                    if let Some(queue) = lock.get_mut(&addr) {
+                        if let Some(item) = queue.front_mut() {
                             // if it's been over the timeout period - then we send it again
                             if item.sent_time.elapsed() > ACK_TIMEOUT_REPLY {
                                 trace!("ACK timeout (seq#{}). resending (original pk {} ms ago)", item.seq_id, item.sent_time.elapsed().as_millis());
                                 socket.send_to(item.packet.as_slice(), addr).ok();
+                                item.sent_time = Instant::now(); // update timestamp so client has another chance
                             }
                         }
                     }
