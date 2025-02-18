@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use log::{debug, trace, warn};
@@ -19,8 +20,9 @@ use crate::TICK_RATE;
 /// How long of no packets from client do we consider them timed out?
 static CLIENT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// How long to wait until we consider packet was lost and resend?
-static ACK_TIMEOUT_REPLY: Duration = Duration::from_millis(50);
+/// How long to sleep when we are in sleep mode
+static SLEEP_INTERVAL: Duration = Duration::from_millis(1000);
+
 
 struct ClientData {
     auth_id: u32,
@@ -66,15 +68,18 @@ pub struct GameInstance {
     client_data: [Option<ClientData>; MAX_PLAYERS],
 
     tick_rate: u8,
-    tick_interval: Interval,
+    active_tick_interval: Interval,
+    per_tick_duration: Duration,
     tick_count: u8,
+
+    sleep_interval: Option<Interval>
 }
 
 impl GameInstance {
     pub fn new(tick_rate: u8) -> Self {
         let ms_per_tick = 1000 / TICK_RATE as u16;
         debug!("tickrate={} ms per tick={}", TICK_RATE, ms_per_tick);
-        let mut interval = interval(Duration::from_millis(ms_per_tick as u64));
+        let mut per_tick_duration = Duration::from_millis(ms_per_tick as u64);
         Self {
             // TODO: make socket
             net: NetServer::new(),
@@ -82,18 +87,72 @@ impl GameInstance {
             client_data: [const { None }; MAX_PLAYERS],
 
             tick_rate,
-            tick_interval: interval,
-            tick_count: 0
+            active_tick_interval: interval(per_tick_duration),
+            per_tick_duration,
+            tick_count: 0,
+
+            sleep_interval: Some(interval(Duration::from_millis(500)))
         }
     }
 
+    /// Overwrites the game tick interval with a specific duration
+    /// Set to None to restore the normal set tick rate
+    fn set_sleep(&mut self, value: bool) {
+        if value {
+            if self.in_sleep() { return; } // ignore if already asleep
+            debug!("entering sleep ({} ms)", SLEEP_INTERVAL.as_millis());
+            self.sleep_interval = Some(interval(SLEEP_INTERVAL));
+        } else {
+            if !self.in_sleep() { return; } // ignore if already awake
+            debug!("waking up from sleep");
+            self.sleep_interval = None;
+        }
+    }
+    pub fn in_sleep(&self) -> bool {
+        self.sleep_interval.is_some()
+    }
+    /// TODO:
+    /// default state: pull long (ms per tick + some extra slow ms)
+    /// if during poll interval detect net activity, wake up
+
     pub async fn tick(&mut self) {
-        self.tick_interval.tick().await;
-        self.net.check_reliable();
+        // Always process packets sleep or not
         if let Some((pk, event, addr)) = self.net.next_event() {
             debug!("got event, processing: {:?}", event);
             self.process_event(addr, &pk, event).await;
         }
+
+        // Try to sleep if applicable
+        if !self.try_sleep().await {
+            // Not sleeping - process things
+            self.active_tick_interval.tick().await;
+            self.process().await;
+        }
+    }
+
+    /// If we are in sleep mode, sleeps for sleep interval.
+    /// Returns true if slept or false if not sleeping (or just woke up)
+    async fn try_sleep(&mut self) -> bool {
+        if let Some(deep_sleep) = &mut self.sleep_interval {
+            deep_sleep.tick().await;
+            // Check if there was any activity to wake us
+            if self.net.stat().has_activity_within(Duration::from_millis(1000)) || self.game.player_count() > 0 {
+                debug!("try_sleep: waking from sleep due to activity");
+                self.set_sleep(false);
+                return false
+            }
+            return true
+        }
+        false
+    }
+
+    /// Process packets, player world
+    pub async fn process(&mut self) {
+        if let Some((pk, event, addr)) = self.net.next_event() {
+            debug!("got event, processing: {:?}", event);
+            self.process_event(addr, &pk, event).await;
+        }
+        let mut client_count = 0;
         for i in 0..MAX_PLAYERS {
             if let Some(client) = &mut self.client_data[i] {
                 if client.has_timed_out() {
@@ -102,6 +161,8 @@ impl GameInstance {
                 }
             }
             if let Some(player) = &mut self.game.players[i] {
+                // TODO: disconnect but client couint still 1?
+                client_count += 1;
                 // If change made, update:
                 if player.process_actions() {
                     trace!("change made, sending update");
@@ -116,18 +177,29 @@ impl GameInstance {
         }
         self.tick_count += 1;
         if self.tick_count == self.tick_rate {
-            let (tx_s,rx_s) = self.net.stats();
-            debug!("{} ticks ran. packet count -  tx={} rx={}", self.tick_count, tx_s, rx_s);
-
+            let pk_count = self.net.pks_per_interval();
+            debug!("tick summary. ticks={} pk_in={} pk_out={} clients={}", self.tick_count, pk_count.rx, pk_count.tx, client_count);
             self.tick_count = 0;
+            // If we haven't seen any network activity then we can sleep
+            if !self.net.stat().has_activity_within(Duration::from_millis(30_000)) && self.game.player_count() == 0 {
+                debug!("no net activity in 30s and no players, sleeping");
+                self.set_sleep(true);
+            }
         }
     }
+
+
     pub fn disconnect_player(&mut self, client_id: &ClientId, reason: String) {
         if let Some(index) = self.get_client_index(client_id) {
             debug!("disconnecting client index. reason={}", reason);
             self.client_data[index as usize] = None;
             self.game.players[index as usize] = None;
             // TODO: send disconnect packet
+        }
+        // If no more players, then we can sleep
+        if self.game.player_count() == 0 {
+            debug!("no more players, going to sleep");
+            self.set_sleep(true);
         }
     }
     pub fn setup_player(&mut self, addr: SocketAddr, name: String) -> (u32, u32) {
@@ -142,6 +214,8 @@ impl GameInstance {
         let client = ClientData::new(auth_id, addr);
 
         self.client_data[client_index as usize] = Some(client);
+
+        self.set_sleep(false); // in case we are sleeping (unlikely), unsleep
 
         (client_index, auth_id)
     }
@@ -338,22 +412,8 @@ impl GameInstance {
 
             match event {
                 // Handled elsewhere
-                ClientEvent::Login {..} => unreachable!(),
-                ClientEvent::Ack { seq_number } => {
-                    // Sequence numbers must be processed in order
-                    // so we can only continue if the top entry is ACK'd
-                    if let Some(top) = client.reliable_queue.get(0) {
-                        if top.seq_id == seq_number {
-                            client.reliable_queue.pop_front();
-                            trace!("ACK seq={} acknowledged", seq_number);
-                            // TODO: somehow next packet in reliable queue gets resent?
-                        } else {
-                            debug!("mismatch ACK. incoming={} top={}", seq_number, top.seq_id);
-                        }
-                    } else {
-                        debug!("stray ACK, no reliable packet in queue. ignoring")
-                    };
-                },
+                ClientEvent::Ack {..} | ClientEvent::Login {..} => unreachable!(),
+
                 ClientEvent::PerformAction { actions } => {
                     trace!("now={} pk.timestamp={} last_timestamp={}", unix_timestamp(), packet.timestamp(), client.last_timestamp);
                     if client.last_timestamp > packet.timestamp() {

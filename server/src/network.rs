@@ -8,7 +8,7 @@ use std::time::Instant;
 use log::{debug, error, info, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::packet::{Packet, PACKET_HEADER_SIZE};
-use mp_game_test_common::{PacketSerialize, PACKET_PROTOCOL_VERSION};
+use mp_game_test_common::{NetContainer, NetDirection, NetStat, PacketSerialize, ACK_TIMEOUT_REPLY, PACKET_PROTOCOL_VERSION};
 use mp_game_test_common::events_server::ServerEvent;
 
 pub struct NetServer {
@@ -19,14 +19,13 @@ pub struct NetServer {
     send_thread: thread::JoinHandle<()>,
     recv_thread: thread::JoinHandle<()>,
 
-    packet_counter: (Arc<AtomicU16>, Arc<AtomicU16>), // (tx, rx),
-
     reliable_queue: ReliableQueue,
     seq_number: u16,
+    net_stat: NetStat
 }
 
 #[derive(Clone)]
-struct ReliableEntry {
+pub struct ReliableEntry {
     pub seq_id: u16,
     pub packet: Packet,
     pub sent_time: Instant
@@ -37,7 +36,7 @@ pub enum OutPacket {
     Multiple(Packet, Vec<SocketAddr>),
 }
 
-type EventQueue = Arc<Mutex<VecDeque<(Packet, SocketAddr)>>>;
+type EventQueue = Arc<Mutex<VecDeque<(Packet, ClientEvent, SocketAddr)>>>;
 type ReliableQueue = Arc<Mutex<HashMap<SocketAddr, VecDeque<ReliableEntry>>>>;
 impl NetServer {
     pub fn new() -> Self  {
@@ -45,19 +44,20 @@ impl NetServer {
         let mut sock = UdpSocket::bind("0.0.0.0:3566").expect("Failed to bind UDP socket");
         let (tx, rx) = channel::<OutPacket>();
         let event_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let packet_counter = (Arc::new(AtomicU16::new(0)), Arc::new(AtomicU16::new(0)));
         let reliable_queue = Arc::new(Mutex::new(HashMap::new()));
+        let net_stat = NetStat::new();
 
         let send_thread = {
             let socket = sock.try_clone().unwrap();
-            let counter = packet_counter.0.clone();
-            thread::spawn(move || network_send_thread(socket, rx, counter))
+            let net_stat = net_stat.clone();
+            thread::spawn(move || network_send_thread(socket, rx, net_stat))
         };
         let recv_thread = {
             let event_queue = event_queue.clone();
             let socket = sock.try_clone().unwrap();
-            let counter = packet_counter.1.clone();
-            thread::spawn(move || network_recv_thread(socket, event_queue.clone(), reliable_queue.clone(), counter))
+            let reliable_queue = reliable_queue.clone();
+            let net_stat = net_stat.clone();
+            thread::spawn(move || network_recv_thread(socket, event_queue.clone(), reliable_queue, net_stat))
         };
 
         info!("server listening at UDP {:?}", sock.local_addr().unwrap());
@@ -68,20 +68,22 @@ impl NetServer {
             send_thread,
             event_queue,
             socket: sock,
-            packet_counter: packet_counter,
             reliable_queue,
-            seq_number: 0
+            seq_number: 0,
+            net_stat
         }
     }
 
-    pub fn stats(&self) -> (u16, u16) {
-        let val = (
-            self.packet_counter.0.load(Ordering::Relaxed),
-            self.packet_counter.1.load(Ordering::Relaxed),
-        );
-        self.packet_counter.0.store(0, Ordering::Relaxed);
-        self.packet_counter.1.store(0, Ordering::Relaxed);
-        val
+    pub fn stat(&self) -> &NetStat {
+        &self.net_stat
+    }
+
+    /// Returns the number of packets sent and received since last called.
+    /// Resets the count
+    pub fn pks_per_interval(&mut self) -> NetContainer<u16> {
+        let pk_stat = self.net_stat.pk_count();
+        self.net_stat.reset_pk_count();
+        pk_stat
     }
 
     pub fn add_reliable_packet(&mut self, addr: SocketAddr, event: ServerEvent) -> ReliableEntry {
@@ -94,11 +96,11 @@ impl NetServer {
             packet: packet,
             sent_time: Instant::now()
         };
+        self.seq_number += 1;
         let mut lock = self.reliable_queue.lock().unwrap();
         let queue = lock.entry(addr)
             .or_insert(VecDeque::new());
         queue.push_back(entry.clone());
-        self.seq_number += 1;
         entry
     }
 
@@ -118,46 +120,75 @@ impl NetServer {
     /// Pops the next event off, if any
     pub fn next_event(&mut self) -> Option<(Packet, ClientEvent, SocketAddr)> {
         let mut lock = self.event_queue.lock().unwrap();
-        lock.pop_front().and_then(|(pk, addr)| {
-            match ClientEvent::from_packet(&pk) {
-                Ok(ev) => {
-                    trace!("received event, pushing to queue");
-                    Some((pk, ev, addr))
-                }
-                Err(err) => {
-                    warn!("bad packet: {:?}", err);
-                    None
-                }
-            }
-        })
+        lock.pop_front()
     }
 }
 
-pub fn network_recv_thread(socket: UdpSocket, mut event_queue: EventQueue, reliable_queue: ReliableQueue, counter: Arc<AtomicU16>) {
+pub fn network_recv_thread(
+    socket: UdpSocket,
+    mut event_queue: EventQueue,
+    reliable_queue: ReliableQueue,
+    mut net_stat: NetStat
+) {
     let mut buf = Vec::with_capacity(2048);
     loop {
         // Check if we received any data, and add it to packet queue
         buf.resize(2048, 0);
         match socket.recv_from(&mut buf) {
             Ok((n, addr)) => {
-                // Check ACK state
-                {
-                    let lock = reliable_queue.lock().unwrap();
-                    if let Some(queue) = lock.get(&addr) {
-                        if let Some(item) = queue.back() {
-
+                net_stat.mark_activity(NetDirection::In);
+                if n > 0 {
+                    let pk = Packet::from(buf.as_slice());
+                    trace!("IN n={} {}", n, pk.as_hex_str());
+                    // TODO: make this process ACK instead?
+                    if !pk.is_valid() {
+                        continue;
+                    }
+                    net_stat.inc_pk_count_in();
+                    match ClientEvent::from_packet(&pk) {
+                        Ok(ev) => {
+                            // If it's ACK packet, handle it here
+                            if let ClientEvent::Ack {seq_number} = ev {
+                                trace!("got ACK {:?}", seq_number);
+                                let mut lock = reliable_queue.lock().unwrap();
+                                if let Some(queue) = lock.get_mut(&addr) {
+                                    trace!("we are expecting ACK");
+                                    // Check only the front element - must be in sequence
+                                    if let Some(item) = queue.front() {
+                                        if item.seq_id == seq_number {
+                                            trace!("received ACK for seq#{}", seq_number);
+                                            queue.pop_front();
+                                        } else {
+                                            trace!("ACK mismatch (expected={}, incoming={})", item.seq_id, seq_number)
+                                        }
+                                    }
+                                } else {
+                                    trace!("no ACK was expected")
+                                }
+                            } else {
+                                trace!("received event, pushing to queue");
+                                let mut lock = event_queue.lock().unwrap();
+                                lock.push_back((pk, ev, addr));
+                            }
+                        }
+                        Err(err) => {
+                            warn!("bad packet: {:?}", err);
                         }
                     }
                 }
-
-                if n > 0 {
-                    counter.fetch_add(1, Ordering::Relaxed);
-                    trace!("IN n={} {:?}", n, &buf[0..n]);
-                    let mut lock = event_queue.lock().unwrap();
-                    let pk = Packet::from(buf.as_slice());
-                    // TODO: make this process ACK instead?
-                    if pk.is_valid() {
-                        lock.push_back((pk, addr));
+                // Check ACK state
+                {
+                    // This code assumes that the server will receive a regular amount of traffic so this is processed
+                    // If zero clients are sending data this will stall
+                    let lock = reliable_queue.lock().unwrap();
+                    if let Some(queue) = lock.get(&addr) {
+                        if let Some(item) = queue.front() {
+                            // if it's been over the timeout period - then we send it again
+                            if item.sent_time.elapsed() > ACK_TIMEOUT_REPLY {
+                                trace!("ACK timeout (seq#{}). resending (original pk {} ms ago)", item.seq_id, item.sent_time.elapsed().as_millis());
+                                socket.send_to(item.packet.as_slice(), addr).ok();
+                            }
+                        }
                     }
                 }
             }
@@ -168,11 +199,15 @@ pub fn network_recv_thread(socket: UdpSocket, mut event_queue: EventQueue, relia
 
     }
 }
-pub fn network_send_thread(socket: UdpSocket, mut transmit_recv: Receiver<OutPacket>, counter: Arc<AtomicU16>) {
+pub fn network_send_thread(
+    socket: UdpSocket,
+    mut transmit_recv: Receiver<OutPacket>,
+    mut net_stat: NetStat
+) {
     loop {
         // Check if there's any data we need to send out
         if let Ok(out) = transmit_recv.recv() {
-            trace!("got packet to send, processing");
+            net_stat.mark_activity(NetDirection::Out);
             match out {
                 OutPacket::Multiple(pk, addr_list) => {
                     trace!("OUT addr_list={:?} pk_len={} py_len={} {}", addr_list, pk.buf_len(), pk.payload_len(), pk.as_hex_str());
@@ -185,7 +220,7 @@ pub fn network_send_thread(socket: UdpSocket, mut transmit_recv: Receiver<OutPac
                     socket.send_to(pk.as_slice(), addr).unwrap();
                 }
             }
-            counter.fetch_add(1, Ordering::Relaxed);
+            net_stat.inc_pk_count_out();
         } else {
             debug!("send_thread: channel closed, exiting");
             break;

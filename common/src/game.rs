@@ -112,6 +112,16 @@ impl CommonGameInstance {
         }
     }
 
+    pub fn player_count(&self) -> usize {
+        let mut count = 0;
+        for i in 0..MAX_PLAYERS {
+            if self.players[i].is_some() {
+                count += 1;
+            }
+        }
+        count
+    }
+
     fn _check_player_id(&self, client_index: u32) {
         assert!(client_index <= self.players.len() as u32, "client index out of bounds");
     }

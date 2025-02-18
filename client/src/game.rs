@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::game::{Action, CommonGameInstance, PlayerData};
 use mp_game_test_common::events_server::ServerEvent;
@@ -102,7 +102,14 @@ impl GameInstance {
     pub fn process_event(&mut self, event: ServerEvent) {
         match event {
             ServerEvent::Login { client_index: client_id, auth_id } => {
-                assert_eq!(self.is_authenticated(), false, "received login data when already authenticated");
+                // Check if we are already logged in
+                if let Some(current_auth_id) = self.auth_id {
+                    // If it's the same thing - disregard
+                    if auth_id != current_auth_id {
+                        warn!("received login data when already authenticated. current_auth_id={} auth_id={}", current_auth_id, auth_id);
+                    }
+                    return;
+                }
                 self._on_login(client_id, auth_id);
             }
             ServerEvent::PlayerSpawn { client_index: client_id, name, position } => {
