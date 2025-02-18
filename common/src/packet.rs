@@ -29,8 +29,8 @@ impl PacketBuilder {
 
     // Sets the sequence number.
     // Note: This field conflicts with auth_id, seq number is only for outgoing server packets
-    pub fn with_sequence_number(mut self, seq_num: u32) -> Self {
-        self.buf.write_u32_at(0xA, seq_num);
+    pub fn with_sequence_number(mut self, seq_num: u16) -> Self {
+        self.buf.write_u16_at(0xA, seq_num);
         self
     }
 
@@ -53,6 +53,7 @@ impl PacketBuilder {
 
 pub const PACKET_HEADER_SIZE: usize = 0xE;
 
+#[derive(Clone)]
 pub struct Packet {
     buf: BitBuffer,
 }
@@ -90,6 +91,14 @@ impl Packet {
         self.buf.peek_u32_at(0x6)
     }
 
+    /// Gets the sequence number. 0 if not a reliable (requiring ACK) packet.
+    /// Only for client reading server sent packets.
+    pub fn sequence_number(&self) -> u16 {
+        self.buf.peek_u16_at(0xA)
+    }
+
+    /// Gets the auth id from client. May be 0 if Login event.
+    /// Only for server reading client sent packets
     pub fn auth_id(&self) -> u32 {
         self.buf.peek_u32_at(0xA)
     }

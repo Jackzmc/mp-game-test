@@ -6,6 +6,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::packet::Packet;
 use std::fmt::Write;
 
+#[derive(Clone)]
 pub struct BitBuffer {
     cursor: usize,
     // offset: usize, // prob can just use vec.length but for now it works

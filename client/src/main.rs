@@ -13,6 +13,9 @@ use std::net::SocketAddr;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Instant;
+use macroquad::{hash, ui};
+use macroquad::ui::{root_ui, widgets, Id};
+use macroquad::ui::widgets::{Editbox, Label};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -30,17 +33,45 @@ async fn main() {
     let args = std::env::args();
     setup_logger();
 
-    let server_ip = args.skip(1).next().expect("no ip specified");
+    let mut ip_addr = "127.0.0.1:3566".to_string();
+    let mut server_ip = None;
+    let window_style = root_ui()
+        .style_builder()
+        .background_margin(RectOffset::new(32.0, 76.0, 44.0, 20.0))
+        .margin(RectOffset::new(0.0, -40.0, 0.0, 0.0))
+        .build();
+    let window_size = vec2(542.0, 430.0);
+    while server_ip.is_none() && !is_quit_requested() {
+        clear_background(WHITE);
+        widgets::Window::new(hash!(), vec2(screen_width() / 2.0 - window_size.x / 2.0,
+                                           screen_height() / 2.0 - window_size.y / 2.0,), window_size)
+            .label("Multiplayer Test")
+            .titlebar(false)
+            .movable(false)
+            .ui(&mut *root_ui(), |ui| {
+                ui.label(None, "Direct Connect");
+                ui.editbox(hash!(), vec2(500., 30.), &mut ip_addr);
+                if ui.button(None, "Connect") {
+                    if let Ok(ip_addr) = ip_addr.parse::<SocketAddr>() {
+                        server_ip = Some(ip_addr);
+                    }
+                }
+            });
 
-    let addr: SocketAddr = server_ip.parse().expect("bad ip");
+        next_frame().await
+    }
+    if is_quit_requested() {
+        std::process::exit(0);
+    }
+
     let mut game = GameInstance::new();
-    game.connect(addr);
+    game.connect(server_ip.unwrap());
     game.login("Test User".to_string()).unwrap();
 
     let mut pos = Position::new(0.0, 0.0, 0.0);
     while !game.is_authenticated() {
         if let Some(event) = game.net_mut().next_event() {
-            debug!("got event, processing: {:?}", event);
+            debug!("[main->login] got event, processing: {:?}", event);
             game.process_event(event);
         }
     }
@@ -60,7 +91,7 @@ async fn main() {
 
         // Check if there's any event to process
         if let Some(event) = game.net_mut().next_event() {
-            debug!("got event, processing: {:?}", event);
+            debug!("[main->loop] got event, processing: {:?}", event);
             game.process_event(event);
         }
         clear_background(WHITE);

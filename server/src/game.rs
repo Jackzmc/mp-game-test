@@ -16,7 +16,11 @@ use mp_game_test_common::def::{Position, MAX_PLAYERS};
 use crate::network::{NetServer, OutPacket};
 use crate::TICK_RATE;
 
+/// How long of no packets from client do we consider them timed out?
 static CLIENT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long to wait until we consider packet was lost and resend?
+static ACK_TIMEOUT_REPLY: Duration = Duration::from_millis(50);
 
 struct ClientData {
     auth_id: u32,
@@ -26,9 +30,11 @@ struct ClientData {
     reliable_queue: VecDeque<ReliableEntry>,
     last_packet_time: Instant
 }
+#[derive(Clone)]
 struct ReliableEntry {
-    seq_id: u16,
-    event: ServerEvent
+    pub seq_id: u16,
+    pub packet: Packet,
+    pub sent_time: Instant
 }
 
 enum ClientId {
@@ -52,16 +58,6 @@ impl ClientData {
     }
     pub fn has_timed_out(&self) -> bool {
        self.last_packet_time.elapsed() > CLIENT_DISCONNECT_TIMEOUT
-    }
-    pub fn add_reliable_packet(&mut self, event: ServerEvent) -> u16 {
-        let seq = self.seq_number;
-        let entry = ReliableEntry {
-            seq_id: seq,
-            event,
-        };
-        self.reliable_queue.push_back(entry);
-        self.seq_number += 1;
-        seq
     }
 }
 pub struct GameInstance {
@@ -93,6 +89,7 @@ impl GameInstance {
 
     pub async fn tick(&mut self) {
         self.tick_interval.tick().await;
+        self.net.check_reliable();
         if let Some((pk, event, addr)) = self.net.next_event() {
             debug!("got event, processing: {:?}", event);
             self.process_event(addr, &pk, event).await;
@@ -112,7 +109,7 @@ impl GameInstance {
                         client_index: player.client_index,
                         position: player.position,
                     };
-                    self.broadcast(move_event).await;
+                    self.broadcast(move_event);
                 }
 
             }
@@ -246,7 +243,7 @@ impl GameInstance {
     }
 
     /// Sends an event to all clients
-    pub async fn broadcast(&self, event: ServerEvent) -> usize {
+    pub fn broadcast(&self, event: ServerEvent) -> usize {
         let pk = event.to_packet();
         let buf = pk.as_slice();;
 
@@ -260,22 +257,18 @@ impl GameInstance {
 
     // Sends a broadcast that must be ACK by all clients
     // No other reliable events will be submitted (on a client basis) until the previous one was ACK
-    pub async fn broadcast_reliable(&mut self, event: ServerEvent) -> usize {
+    pub fn broadcast_reliable(&mut self, event: ServerEvent) -> usize {
         // TODO: make reliable
         let addr_list = self._get_addr_list();
         let len = addr_list.len();
         for addr in addr_list {
-            if let Some((_, client)) = self.get_client_mut(&ClientId::Addr(addr)) {
-                let seq_id = client.add_reliable_packet(event.clone());
-                let addr = client.addr.clone();
-                self.send_to(&event, addr).await;
-            }
+            self.send_to_reliable(event.clone(), &ClientId::Addr(addr)).ok();
         }
         len
     }
 
     /// Send an event to a specific client
-    pub async fn send_to(&mut self, event: &ServerEvent, addr: SocketAddr) {
+    pub fn send_to(&mut self, event: &ServerEvent, addr: SocketAddr) {
         let pk = event.to_packet();
         let buf = pk.as_slice();;
         debug!("EVENT[{}B] {:?} {:?}", buf.len(), addr, event);
@@ -283,12 +276,13 @@ impl GameInstance {
     }
 
     /// Sends an event to a specified client, returning Ok(sequence_number) or error if client not found
-    pub async fn send_to_reliable(&mut self, event: ServerEvent, client_id: &ClientId) -> Result<u16, anyhow::Error> {
+    pub fn send_to_reliable(&mut self, event: ServerEvent, client_id: &ClientId) -> Result<u16, anyhow::Error> {
         if let Some((_, client)) = self.get_client_mut(client_id) {
-            let seq_id = client.add_reliable_packet(event.clone());
             let addr = client.addr.clone();
-            self.send_to(&event, addr).await;
-            return Ok(seq_id);
+            let entry = self.net.add_reliable_packet(addr, event.clone());
+            debug!("EVENT[{}B] {:?} {:?}", entry.packet.buf_len(), addr, event);
+            self.net.send(entry.packet.clone(), addr).ok();
+            return Ok(entry.seq_id);
         }
         Err(anyhow!("Could not find client"))
     }
@@ -309,19 +303,19 @@ impl GameInstance {
             auth_id,
         };
         let client_id = ClientId::ClientIndex(client_index);
-        self.send_to_reliable(login_event, &client_id).await.ok();
+        self.send_to_reliable(login_event, &client_id).ok();
 
         // Tell client all connected players
         for i in 0..MAX_PLAYERS {
             if let Some(player) = &self.game.players[i] {
                 let event = player.get_spawn_event();
-                self.send_to_reliable(event, &client_id).await.ok();
+                self.send_to_reliable(event, &client_id).ok();
             }
         }
 
         // Tell all other clients that this client connected
         let spawn_event = self.game.players[client_index as usize].as_ref().unwrap().get_spawn_event();
-        self.broadcast_reliable(spawn_event).await;
+        self.broadcast_reliable(spawn_event);
 
         PacketResponse::Ok
     }
@@ -346,6 +340,8 @@ impl GameInstance {
                 // Handled elsewhere
                 ClientEvent::Login {..} => unreachable!(),
                 ClientEvent::Ack { seq_number } => {
+                    // Sequence numbers must be processed in order
+                    // so we can only continue if the top entry is ACK'd
                     if let Some(top) = client.reliable_queue.get(0) {
                         if top.seq_id == seq_number {
                             client.reliable_queue.pop_front();
@@ -374,7 +370,7 @@ impl GameInstance {
                         client_index: player.client_index,
                         reason,
                     };
-                    self.broadcast_reliable(event).await;
+                    self.broadcast_reliable(event);
                 }
             }
             return PacketResponse::Ok

@@ -1,3 +1,4 @@
+use int_enum::IntEnum;
 use log::trace;
 use crate::def::Position;
 use crate::packet::{Packet, PacketBuilder};

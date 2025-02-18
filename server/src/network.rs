@@ -1,13 +1,15 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvError, Sender};
 use std::thread;
+use std::time::Instant;
 use log::{debug, error, info, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::packet::{Packet, PACKET_HEADER_SIZE};
 use mp_game_test_common::{PacketSerialize, PACKET_PROTOCOL_VERSION};
+use mp_game_test_common::events_server::ServerEvent;
 
 pub struct NetServer {
     event_queue: EventQueue,
@@ -17,7 +19,17 @@ pub struct NetServer {
     send_thread: thread::JoinHandle<()>,
     recv_thread: thread::JoinHandle<()>,
 
-    packet_counter: (Arc<AtomicU16>, Arc<AtomicU16>), // (tx, rx)
+    packet_counter: (Arc<AtomicU16>, Arc<AtomicU16>), // (tx, rx),
+
+    reliable_queue: ReliableQueue,
+    seq_number: u16,
+}
+
+#[derive(Clone)]
+struct ReliableEntry {
+    pub seq_id: u16,
+    pub packet: Packet,
+    pub sent_time: Instant
 }
 
 pub enum OutPacket {
@@ -26,7 +38,7 @@ pub enum OutPacket {
 }
 
 type EventQueue = Arc<Mutex<VecDeque<(Packet, SocketAddr)>>>;
-
+type ReliableQueue = Arc<Mutex<HashMap<SocketAddr, VecDeque<ReliableEntry>>>>;
 impl NetServer {
     pub fn new() -> Self  {
         // socket.set_nonblocking(false);
@@ -34,7 +46,8 @@ impl NetServer {
         let (tx, rx) = channel::<OutPacket>();
         let event_queue = Arc::new(Mutex::new(VecDeque::new()));
         let packet_counter = (Arc::new(AtomicU16::new(0)), Arc::new(AtomicU16::new(0)));
-        // socket.set_nonblocking(false).unwrap();
+        let reliable_queue = Arc::new(Mutex::new(HashMap::new()));
+
         let send_thread = {
             let socket = sock.try_clone().unwrap();
             let counter = packet_counter.0.clone();
@@ -44,8 +57,9 @@ impl NetServer {
             let event_queue = event_queue.clone();
             let socket = sock.try_clone().unwrap();
             let counter = packet_counter.1.clone();
-            thread::spawn(move || network_recv_thread(socket, event_queue.clone(), counter))
+            thread::spawn(move || network_recv_thread(socket, event_queue.clone(), reliable_queue.clone(), counter))
         };
+
         info!("server listening at UDP {:?}", sock.local_addr().unwrap());
 
         NetServer {
@@ -54,7 +68,9 @@ impl NetServer {
             send_thread,
             event_queue,
             socket: sock,
-            packet_counter: packet_counter
+            packet_counter: packet_counter,
+            reliable_queue,
+            seq_number: 0
         }
     }
 
@@ -66,6 +82,24 @@ impl NetServer {
         self.packet_counter.0.store(0, Ordering::Relaxed);
         self.packet_counter.1.store(0, Ordering::Relaxed);
         val
+    }
+
+    pub fn add_reliable_packet(&mut self, addr: SocketAddr, event: ServerEvent) -> ReliableEntry {
+        let seq = self.seq_number;
+        let packet = event.to_packet_builder()
+            .with_sequence_number(seq)
+            .finalize();
+        let entry = ReliableEntry {
+            seq_id: seq,
+            packet: packet,
+            sent_time: Instant::now()
+        };
+        let mut lock = self.reliable_queue.lock().unwrap();
+        let queue = lock.entry(addr)
+            .or_insert(VecDeque::new());
+        queue.push_back(entry.clone());
+        self.seq_number += 1;
+        entry
     }
 
     pub fn send(&self, packet: Packet, addr: SocketAddr) -> Result<(), String> {
@@ -99,21 +133,31 @@ impl NetServer {
     }
 }
 
-pub fn network_recv_thread(socket: UdpSocket, mut event_queue: EventQueue, counter: Arc<AtomicU16>) {
+pub fn network_recv_thread(socket: UdpSocket, mut event_queue: EventQueue, reliable_queue: ReliableQueue, counter: Arc<AtomicU16>) {
     let mut buf = Vec::with_capacity(2048);
     loop {
         // Check if we received any data, and add it to packet queue
         buf.resize(2048, 0);
         match socket.recv_from(&mut buf) {
             Ok((n, addr)) => {
+                // Check ACK state
+                {
+                    let lock = reliable_queue.lock().unwrap();
+                    if let Some(queue) = lock.get(&addr) {
+                        if let Some(item) = queue.back() {
+
+                        }
+                    }
+                }
+
                 if n > 0 {
                     counter.fetch_add(1, Ordering::Relaxed);
                     trace!("IN n={} {:?}", n, &buf[0..n]);
                     let mut lock = event_queue.lock().unwrap();
                     let pk = Packet::from(buf.as_slice());
+                    // TODO: make this process ACK instead?
                     if pk.is_valid() {
                         lock.push_back((pk, addr));
-                        continue;
                     }
                 }
             }
@@ -121,6 +165,7 @@ pub fn network_recv_thread(socket: UdpSocket, mut event_queue: EventQueue, count
                 error!("[net] recv error: {}", e)
             }
         }
+
     }
 }
 pub fn network_send_thread(socket: UdpSocket, mut transmit_recv: Receiver<OutPacket>, counter: Arc<AtomicU16>) {

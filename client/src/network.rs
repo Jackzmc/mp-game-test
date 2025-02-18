@@ -97,6 +97,7 @@ impl NetClient  {
 
 pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut event_queue: EventQueue, counter: Arc<AtomicU16>) {
     let mut buf = Vec::with_capacity(2048);
+    let mut current_auth_id = 0;
     while end_signal.try_recv() != Err(TryRecvError::Disconnected) { // Check if we are good
         // Check if we received any data, and add it to packet queue
         buf.resize(2048, 0);
@@ -104,16 +105,44 @@ pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut even
             Ok(n) => {
                 if n > 0 {
                     counter.fetch_add(1, Ordering::Relaxed);
-                    trace!("IN n={} {:?}", n, &buf[0..n]);
-                    let mut lock = event_queue.lock().unwrap();
                     let pk = Packet::from(buf.as_slice());
+                    trace!("[net] IN n={} {}", n, &pk.as_hex_str());
+                    if !pk.is_valid() {
+                        trace!("[net] INVALID pk, dropping");
+                        continue;
+                    }
+
+                    // ACK any seq numbers
+                    let seq_num = pk.sequence_number();
+                    if seq_num > 0 {
+                        let event = ClientEvent::Ack {
+                            seq_number: seq_num,
+                        };
+                        trace!("[net] sending ACK seq#{}", seq_num);
+                        let out_pk = event.to_packet_builder()
+                            .with_auth_id(current_auth_id)
+                            .finalize();
+                        // Send out a burst of 3 - hopefully at least one gets sent
+                        for _ in 0..3 {
+                            socket.send(out_pk.as_slice()).ok();
+                            // Add a delay just to ensure they don't all get caught at once
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                    }
+
                     match ServerEvent::from_packet(&pk) {
                         Ok(ev) => {
-                            trace!("received event, pushing to queue");
+                            // A little hacky, but we need the auth id for ACK
+                            if let ServerEvent::Login {auth_id, ..} = ev {
+                                trace!("[net] new auth id = {}", auth_id);
+                                current_auth_id = auth_id;
+                            }
+
+                            let mut lock = event_queue.lock().unwrap();
                             lock.push_back(ev);
                         }
                         Err(err) => {
-                            warn!("bad packet: {:?}", err);
+                            warn!("[net] bad packet: {:?}", err);
                         }
                     };
                 }
@@ -123,19 +152,19 @@ pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut even
             }
         }
     }
-    debug!("recv thread: EXITED");
+    debug!("[net] recv thread: EXITED");
 }
 pub fn network_send_thread(socket: UdpSocket, mut transmit_recv: Receiver<Packet>,counter: Arc<AtomicU16>) {
     loop {
         // Check if there's any data we need to send out
         if let Ok(pk) = transmit_recv.recv() {
-            trace!("OUT pk_len={} py_len={} {}", pk.buf_len(), pk.payload_len(), pk.as_hex_str());
+            trace!("[net] OUT pk_len={} py_len={} {}", pk.buf_len(), pk.payload_len(), pk.as_hex_str());
             socket.send(pk.as_slice()).unwrap();
             counter.fetch_add(1, Ordering::Relaxed);
         } else {
-            debug!("send_thread: channel closed, exiting");
+            debug!("[net] send_thread: channel closed, exiting");
             break;
         }
     }
-    debug!("send thread: EXITED");
+    debug!("[net] send thread: EXITED");
 }
