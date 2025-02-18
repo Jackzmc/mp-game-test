@@ -19,6 +19,8 @@ pub struct NetClient {
     send_thread: thread::JoinHandle<()>,
     recv_thread: thread::JoinHandle<()>,
 
+    last_error: Arc<Mutex<Option<String>>>,
+
     packet_counter: (Arc<AtomicU16>, Arc<AtomicU16>), // (tx, rx)
 }
 
@@ -28,6 +30,7 @@ type EventQueue = Arc<Mutex<VecDeque<ServerEvent>>>;
 
 impl NetClient  {
     pub fn new(addr: SocketAddr) -> Self  {
+        let last_error = Arc::new(Mutex::new(None));
         // socket.set_nonblocking(false);
         let (tx, rx) = channel::<Packet>();
         let event_queue = Arc::new(Mutex::new(VecDeque::new()));
@@ -41,7 +44,8 @@ impl NetClient  {
             let event_queue = event_queue.clone();
             let socket = socket.try_clone().unwrap();
             let counter = packet_counter.0.clone();
-            thread::spawn(move || network_recv_thread(end_signal.1, socket, event_queue.clone(), counter))
+            let last_error = last_error.clone();
+            thread::spawn(move || network_recv_thread(end_signal.1, socket, event_queue.clone(), counter, last_error))
         };
         let send_thread = {
             let socket = socket.try_clone().unwrap();
@@ -57,6 +61,7 @@ impl NetClient  {
             event_queue,
             socket,
             packet_counter,
+            last_error,
         }
     }
 
@@ -68,6 +73,16 @@ impl NetClient  {
         self.packet_counter.0.store(0, Ordering::Relaxed);
         self.packet_counter.1.store(0, Ordering::Relaxed);
         val
+    }
+
+    pub fn last_err(&self) -> Option<String> {
+        let lock = self.last_error.lock().unwrap();
+        lock.as_ref().map(|s| s.clone())
+    }
+
+    pub fn clear_last_err(&mut self) {
+        let mut lock = self.last_error.lock().unwrap();
+        *lock = None;
     }
 
     pub fn end(mut self) {
@@ -95,7 +110,7 @@ impl NetClient  {
     }
 }
 
-pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut event_queue: EventQueue, counter: Arc<AtomicU16>) {
+pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut event_queue: EventQueue, counter: Arc<AtomicU16>, last_error: Arc<Mutex<Option<String>>>) {
     let mut buf = Vec::with_capacity(2048);
     let mut current_auth_id = 0;
     while end_signal.try_recv() != Err(TryRecvError::Disconnected) { // Check if we are good
@@ -148,7 +163,9 @@ pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut even
                 }
             }
             Err(e) => {
-                error!("[net] recv error: {}", e)
+                error!("[net] recv error: {}", e);
+                let mut lock = last_error.lock().unwrap();
+                *lock = Some(e.to_string());
             }
         }
     }

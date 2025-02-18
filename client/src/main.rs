@@ -1,5 +1,6 @@
 mod game;
 mod network;
+mod main_menu;
 
 use crate::game::GameInstance;
 use crate::network::NetClient;
@@ -18,6 +19,7 @@ use macroquad::ui::{root_ui, widgets, Id};
 use macroquad::ui::widgets::{Editbox, Label};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use crate::main_menu::MainMenu;
 
 fn window_conf() -> Conf {
     Conf {
@@ -33,40 +35,44 @@ async fn main() {
     let args = std::env::args();
     setup_logger();
 
-    let mut ip_addr = "127.0.0.1:3566".to_string();
-    let mut server_ip = None;
-    let window_style = root_ui()
-        .style_builder()
-        .background_margin(RectOffset::new(32.0, 76.0, 44.0, 20.0))
-        .margin(RectOffset::new(0.0, -40.0, 0.0, 0.0))
-        .build();
-    let window_size = vec2(542.0, 430.0);
-    while server_ip.is_none() && !is_quit_requested() {
-        clear_background(WHITE);
-        widgets::Window::new(hash!(), vec2(screen_width() / 2.0 - window_size.x / 2.0,
-                                           screen_height() / 2.0 - window_size.y / 2.0,), window_size)
-            .label("Multiplayer Test")
-            .titlebar(false)
-            .movable(false)
-            .ui(&mut *root_ui(), |ui| {
-                ui.label(None, "Direct Connect");
-                ui.editbox(hash!(), vec2(500., 30.), &mut ip_addr);
-                if ui.button(None, "Connect") {
-                    if let Ok(ip_addr) = ip_addr.parse::<SocketAddr>() {
-                        server_ip = Some(ip_addr);
-                    }
-                }
-            });
+    let mut main_menu = MainMenu::new();
+    let mut game = GameInstance::new();
 
-        next_frame().await
+    while !is_quit_requested() {
+        main_menu.draw().await;
+        if !game.is_connected() {
+            if let Some((ip_addr, name)) = main_menu.connect_info() {
+                debug!("got connect info {} {} - connecting", ip_addr, name);
+                main_menu.set_status_msg(Some("Connecting".to_string()));
+                if let Err(e) = game.connect(ip_addr, name) {
+                    error!("login error: {}", e);
+                    main_menu.set_err_msg(Some(e));
+                }
+            }
+        } else if !game.is_authenticated() {
+            // While we are connected but not authenticated, wait for the login event to process
+            if let Some(err) = game.net().last_err() {
+                error!("login error: {}", err);
+                main_menu.set_err_msg(Some(err));
+                main_menu.set_status_msg(None);
+                game.net_mut().clear_last_err();
+            }
+            if let Some(event) = game.net_mut().next_event() {
+                debug!("[main->main_menu] got event, processing: {:?}", event);
+                game.process_event(event);
+            }
+        } else {
+            debug!("authenticated. ready to go.");
+            // Authenticated - we are ready
+            break;
+        }
+        next_frame().await;
     }
     if is_quit_requested() {
-        std::process::exit(0);
+        return std::process::exit(0);
     }
-
-    let mut game = GameInstance::new();
-    game.connect(server_ip.unwrap());
-    game.login("Test User".to_string()).unwrap();
+    let server_ip = main_menu.ip_addr().unwrap();
+    let name = main_menu.name().to_owned();
 
     let mut pos = Position::new(0.0, 0.0, 0.0);
     while !game.is_authenticated() {

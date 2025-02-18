@@ -431,9 +431,9 @@ dependencies = [
  "log",
  "macroquad",
  "mp-game-test-common",
+ "rand",
  "serde",
  "serde_json",
- "tokio",
  "tracing-subscriber",
 ]
 

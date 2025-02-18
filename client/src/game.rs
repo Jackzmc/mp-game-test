@@ -23,8 +23,17 @@ impl GameInstance {
             actions: Action::empty()
         }
     }
-    pub fn connect(&mut self, addr: SocketAddr) {
-        self.net = Some(NetClient::new(addr))
+    pub fn connect(&mut self, addr: SocketAddr, name: String) -> Result<(), String> {
+        if self.net.is_some() {
+            return Err("Already connected".to_string());
+        }
+        self.net = Some(NetClient::new(addr));
+        let event = ClientEvent::Login {
+            version: PACKET_PROTOCOL_VERSION,
+            name: name
+        };
+        // This should never really fail - is just a channel to another thread
+        self.send(&event).map(|_| ())
     }
     pub fn is_connected(&self) -> bool {
         self.net.is_some()
@@ -42,7 +51,7 @@ impl GameInstance {
         self.auth_id.as_ref().cloned()
     }
     pub fn is_authenticated(&self) -> bool {
-        self.auth_id.is_some()
+        self.is_connected() && self.auth_id.is_some()
     }
     pub fn _on_login(&mut self, client_id: u32, auth_id: u32) {
         self.client_id = Some(client_id);
@@ -59,13 +68,6 @@ impl GameInstance {
         self.client_id.and_then(|client_id| self.game.players[client_id as usize].as_mut())
     }
 
-    pub fn login(&self, name: String) -> Result<(), String> {
-        let event = ClientEvent::Login {
-            version: PACKET_PROTOCOL_VERSION,
-            name: name
-        };
-        self.send(&event).map(|_| ())
-    }
     pub fn disconnect<S>(&mut self, reason: S) where S: Into<String> {
         trace!("disconnect triggered, sending");
         let event = ClientEvent::Disconnect {
