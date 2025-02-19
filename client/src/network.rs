@@ -7,7 +7,7 @@ use std::thread;
 use log::{debug, error, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::packet::{Packet, PACKET_HEADER_SIZE};
-use mp_game_test_common::{PacketSerialize, PACKET_PROTOCOL_VERSION};
+use mp_game_test_common::{NetStat, PacketSerialize, PACKET_PROTOCOL_VERSION};
 use mp_game_test_common::events_server::ServerEvent;
 
 pub struct NetClient {
@@ -22,6 +22,8 @@ pub struct NetClient {
     last_error: Arc<Mutex<Option<String>>>,
 
     packet_counter: (Arc<AtomicU16>, Arc<AtomicU16>), // (tx, rx)
+
+    net_stat: NetStat
 }
 
 
@@ -35,6 +37,7 @@ impl NetClient  {
         let (tx, rx) = channel::<Packet>();
         let event_queue = Arc::new(Mutex::new(VecDeque::new()));
         let mut socket = UdpSocket::bind("0.0.0.0:0").unwrap();
+        let net_stat = NetStat::new();
         socket.connect(addr).unwrap();
         let end_signal = channel::<()>();
         // socket.set_nonblocking(false).unwrap();
@@ -44,12 +47,15 @@ impl NetClient  {
             let event_queue = event_queue.clone();
             let socket = socket.try_clone().unwrap();
             let counter = packet_counter.0.clone();
+            let net_stat = net_stat.clone();
             let last_error = last_error.clone();
+
             thread::spawn(move || network_recv_thread(end_signal.1, socket, event_queue.clone(), counter, last_error))
         };
         let send_thread = {
             let socket = socket.try_clone().unwrap();
             let counter = packet_counter.1.clone();
+            let net_stat = net_stat.clone();
             thread::spawn(move || network_send_thread(socket, rx, counter))
         };
 
@@ -62,6 +68,7 @@ impl NetClient  {
             socket,
             packet_counter,
             last_error,
+            net_stat
         }
     }
 

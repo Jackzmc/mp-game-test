@@ -19,7 +19,18 @@ use macroquad::ui::{root_ui, widgets, Id};
 use macroquad::ui::widgets::{Editbox, Label};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use clap::Parser;
 use crate::main_menu::MainMenu;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(long, alias = "connect")]
+    connect_to: Option<String>,
+
+    #[arg(long)]
+    name: Option<String>
+}
 
 fn window_conf() -> Conf {
     Conf {
@@ -32,10 +43,21 @@ fn window_conf() -> Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     prevent_quit();
-    let args = std::env::args();
+    let args = Args::parse();
     setup_logger();
 
-    let mut main_menu = MainMenu::new();
+    let mut server_ip = None;;
+    if let Some(connect_to) = args.connect_to {
+        server_ip = match connect_to.parse::<SocketAddr>() {
+            Ok(addr) => Some(addr),
+            Err(e) => {
+                error!("--connect: given address is invalid ({}): {}", connect_to, e);
+                None
+            }
+        }
+    }
+
+    let mut main_menu = MainMenu::new(args.name, server_ip);
     let mut game = GameInstance::new();
 
     while !is_quit_requested() {
@@ -81,39 +103,33 @@ async fn main() {
             game.process_event(event);
         }
     }
-    let mut cam = Camera2D {
-        zoom: Vec2::new(1.0, screen_width() / screen_height()),
-        target: Vec2::new(-1.0, -1.0),
-        ..Default::default()
-    };
+    let mut cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, screen_width(), screen_height()));
     debug!("starting draw loop");
     let mut instant: Option<Instant> = None;
     let mut fps_calc = FpsCounter::new();
     let mut frame: u64 = 0;
     // While connected:?
-    while !is_quit_requested() {
-        let prev_frame_time = instant.map(|instant| instant.elapsed()); //instant.elapsed();
-        instant = Some(Instant::now());
-
-        // Check if there's any event to process
-        if let Some(event) = game.net_mut().next_event() {
-            debug!("[main->loop] got event, processing: {:?}", event);
-            game.process_event(event);
-        }
+    fn draw(cam: &mut Camera2D, game: &mut GameInstance, fps_calc: &mut FpsCounter) {
         clear_background(WHITE);
 
-        set_camera(&mut cam);
+        set_camera(cam);
         // draw_grid(20, 1., BLACK, GRAY);
         draw_line(-0.4, 0.4, -0.8, 0.9, 0.05, BLUE);
-        draw_rectangle(-0.3, 0.3, 0.2, 0.2, GREEN);
-        draw_rectangle(0.0, 0.0, 200.0, 200.0, GREEN);
+        draw_rectangle(-0.3, 0.3, 0.2, 0.2, PURPLE);
+        draw_rectangle(0.0, 0.0, 200.0, 200.0, PURPLE);
         draw_text("TEST", -0.2, 0.2, 0.4, RED);
+
+        draw_rectangle(0.0, 0.0, 50.0, 50.0, GREEN);
+        draw_rectangle(screen_width() - 50.0, 0.0, 50.0, 50.0, GREEN);
+        draw_rectangle(screen_width() - 50.0, screen_height() - 50.0, 50.0, 50.0, GREEN);
+        draw_rectangle(0.0, screen_height() - 50.0, 50.0, 50.0, GREEN);
+
 
         // TODO: draw players
         for i in 0..MAX_PLAYERS {
             if let Some(player) = &game.game.players[i] {
                 let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
-                draw_rectangle(pos.x, pos.y, 0.1, 0.1, BLACK);
+                draw_rectangle(pos.x, pos.y, 20.0, 20.0, BLACK);
                 // draw_cube(Vec3::new(pos.x, pos.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
                 draw_text(
                     &i.to_string(),
@@ -126,10 +142,10 @@ async fn main() {
         }
 
         // TODO: get player pos mut
-        set_action(&mut game, Action::Forward, KeyCode::W);
-        set_action(&mut game, Action::Backward, KeyCode::S);
-        set_action(&mut game, Action::Left, KeyCode::A);
-        set_action(&mut game, Action::Right, KeyCode::D);
+        set_action(game, Action::Forward, KeyCode::W);
+        set_action(game, Action::Backward, KeyCode::S);
+        set_action(game, Action::Left, KeyCode::A);
+        set_action(game, Action::Right, KeyCode::D);
         if let Some(player) = game.player_mut() {
             // cam.offset = Vec2::new(player.position.x, player.position.y);
             // trace!("cam.offset={}", cam.offset);
@@ -154,12 +170,6 @@ async fn main() {
             20.0,
             DARKGRAY,
         );
-        if frame % 10 == 0 {
-            if let Some(prev_frame_time) = prev_frame_time {
-                let fps = 1.0 / prev_frame_time.as_secs_f64();
-                fps_calc.add_fps(fps);
-            }
-        }
         draw_text(
             &format!("{:.0}", fps_calc.average()),
             40.0,
@@ -167,6 +177,23 @@ async fn main() {
             20.0,
             DARKGRAY,
         );
+    }
+    while !is_quit_requested() {
+        let prev_frame_time = instant.map(|instant| instant.elapsed()); //instant.elapsed();
+        instant = Some(Instant::now());
+
+        // Check if there's any event to process
+        if let Some(event) = game.net_mut().next_event() {
+            debug!("[main->loop] got event, processing: {:?}", event);
+            game.process_event(event);
+        }
+        draw(&mut cam, &mut game, &mut fps_calc);
+        if frame % 10 == 0 {
+            if let Some(prev_frame_time) = prev_frame_time {
+                let fps = 1.0 / prev_frame_time.as_secs_f64();
+                fps_calc.add_fps(fps);
+            }
+        }
         frame += 1;
         next_frame().await
     }

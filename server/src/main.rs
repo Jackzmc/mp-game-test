@@ -21,7 +21,6 @@ const TICK_RATE: u8 = 30;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Name of the person to greet
     #[arg(long, alias = "tickrate", default_value_t = 30)]
     tick_rate: u8,
 }

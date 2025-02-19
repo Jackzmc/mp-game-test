@@ -428,6 +428,7 @@ dependencies = [
 name = "mp-game-test-client"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "log",
  "macroquad",
  "mp-game-test-common",

@@ -82,11 +82,15 @@ impl NetStat {
         NetContainer::new(pk_in, pk_out)
     }
 
-    pub fn inc_pk_count_in(&mut self) {
-        self.packet_count.rx.fetch_add(1, Ordering::Relaxed);
-    }
-    pub fn inc_pk_count_out(&mut self) {
-        self.packet_count.tx.fetch_add(1, Ordering::Relaxed);
+    pub fn inc_pk_count(&mut self, dir: NetDirection) {
+        match dir {
+            NetDirection::In => {
+                self.packet_count.rx.fetch_add(1, Ordering::Relaxed);
+            },
+            NetDirection::Out => {
+                self.packet_count.tx.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     pub fn add_ping(&mut self, ping: u16) {

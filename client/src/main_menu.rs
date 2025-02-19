@@ -25,12 +25,12 @@ static NAMES: &'static [&str] = &[
 
 static WINDOW_SIZE: Vec2 = vec2(542.0, 430.0);
 impl MainMenu {
-    pub fn new() -> Self {
-        let name = NAMES[random_range(0..NAMES.len())];
+    pub fn new(name: Option<String>, ip_addr: Option<SocketAddr>) -> Self {
+        let name = name.unwrap_or_else(|| NAMES[random_range(0..NAMES.len())].to_string() );
         Self {
-            ip_addr: None,
+            ip_addr: ip_addr,
             ip_input: "127.0.0.1:3566".to_string(),
-            name_input: name.to_string(),
+            name_input: name,
             err: None,
             status_msg: None
         }

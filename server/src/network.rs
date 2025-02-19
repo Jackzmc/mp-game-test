@@ -87,6 +87,9 @@ impl NetServer {
     }
 
     pub fn add_reliable_packet(&mut self, addr: SocketAddr, event: ServerEvent) -> ReliableEntry {
+        // increment first - seq number has to be > 0 (wrap to 1 on overflow)
+        let seq = self.seq_number.checked_add(1).unwrap_or(1);
+        self.seq_number = seq;
         let seq = self.seq_number;
         let packet = event.to_packet_builder()
             .with_sequence_number(seq)
@@ -96,7 +99,6 @@ impl NetServer {
             packet: packet,
             sent_time: Instant::now()
         };
-        self.seq_number += 1;
         let mut lock = self.reliable_queue.lock().unwrap();
         let queue = lock.entry(addr)
             .or_insert(VecDeque::new());
@@ -144,7 +146,7 @@ pub fn network_recv_thread(
                     if !pk.is_valid() {
                         continue;
                     }
-                    net_stat.inc_pk_count_in();
+                    net_stat.inc_pk_count(NetDirection::Out);
                     match ClientEvent::from_packet(&pk) {
                         Ok(ev) => {
                             // If it's ACK packet, handle it here
@@ -159,6 +161,7 @@ pub fn network_recv_thread(
                                             trace!("received ACK for seq#{}", seq_number);
                                             queue.pop_front();
                                         } else {
+                                            // TODO: put in queue?
                                             trace!("ACK mismatch (expected={}, incoming={})", item.seq_id, seq_number)
                                         }
                                     }
@@ -221,7 +224,7 @@ pub fn network_send_thread(
                     socket.send_to(pk.as_slice(), addr).unwrap();
                 }
             }
-            net_stat.inc_pk_count_out();
+            net_stat.inc_pk_count(NetDirection::Out);
         } else {
             debug!("send_thread: channel closed, exiting");
             break;

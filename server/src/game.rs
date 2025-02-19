@@ -178,7 +178,7 @@ impl GameInstance {
         self.tick_count += 1;
         if self.tick_count == self.tick_rate {
             let pk_count = self.net.pks_per_interval();
-            debug!("tick summary. ticks={} pk_in={} pk_out={} clients={}", self.tick_count, pk_count.rx, pk_count.tx, client_count);
+            debug!("tick summary. ticks={} pk_in={}/s pk_out={}/s \tclients={}", self.tick_count, pk_count.rx, pk_count.tx, client_count);
             self.tick_count = 0;
             // If we haven't seen any network activity then we can sleep
             if !self.net.stat().has_activity_within(Duration::from_millis(30_000)) && self.game.player_count() == 0 {
@@ -191,7 +191,7 @@ impl GameInstance {
 
     pub fn disconnect_player(&mut self, client_id: &ClientId, reason: String) {
         if let Some(index) = self.get_client_index(client_id) {
-            debug!("disconnecting client index. reason={}", reason);
+            debug!("disconnecting client index {}. reason={}", index, reason);
             self.client_data[index as usize] = None;
             self.game.players[index as usize] = None;
             // TODO: send disconnect packet
