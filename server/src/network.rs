@@ -141,21 +141,6 @@ pub fn network_recv_thread(
                                 trace!("got ACK {:?}", seq_number);
                                 let mut lock = reliable_queue.lock().unwrap();
                                 lock.try_accept_ack(addr, seq_number);
-                                // if let Some(queue) = lock.(&addr) {
-                                //     trace!("we are expecting ACK");
-                                //     // Check only the front element - must be in sequence
-                                //     if let Some(item) = queue.front() {
-                                //         if item.seq_id == seq_number {
-                                //             trace!("received ACK for seq#{}", seq_number);
-                                //             queue.pop_front();
-                                //         } else {
-                                //             // TODO: put in queue?
-                                //             trace!("ACK mismatch (expected={}, incoming={})", item.seq_id, seq_number)
-                                //         }
-                                //     }
-                                // } else {
-                                //     trace!("no ACK was expected")
-                                // }
                             } else {
                                 trace!("received event, pushing to queue");
                                 let mut lock = event_queue.lock().unwrap();
@@ -177,16 +162,6 @@ pub fn network_recv_thread(
                         socket.send_to(item.packet.as_slice(), addr).ok();
                         item.sent_time = Instant::now(); // update timestamp so client has another chance
                     }
-                    // if let Some(queue) = lock.get_mut(&addr) {
-                    //     if let Some(item) = queue.front_mut() {
-                    //         // if it's been over the timeout period - then we send it again
-                    //         if item.sent_time.elapsed() > ACK_TIMEOUT_REPLY {
-                    //             trace!("ACK timeout (seq#{}). resending (original pk {} ms ago)", item.seq_id, item.sent_time.elapsed().as_millis());
-                    //             socket.send_to(item.packet.as_slice(), addr).ok();
-                    //             item.sent_time = Instant::now(); // update timestamp so client has another chance
-                    //         }
-                    //     }
-                    // }
                 }
             }
             Err(e) => {
