@@ -172,9 +172,12 @@ pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut even
                 }
             }
             Err(e) => {
-                error!("[net] recv error: {}", e);
-                let mut lock = last_error.lock().unwrap();
-                *lock = Some(e.to_string());
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    error!("[net] recv error: {}", e);
+                    let mut lock = last_error.lock().unwrap();
+                    *lock = Some(e.to_string());
+                }
+
             }
         }
     }

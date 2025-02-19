@@ -117,11 +117,6 @@ async fn main() {
 
         set_camera(&mut game.cam.camera);
         // draw_grid(20, 1., BLACK, GRAY);
-        draw_line(-0.4, 0.4, -0.8, 0.9, 0.05, BLUE);
-        draw_rectangle(-0.3, 0.3, 0.2, 0.2, PURPLE);
-        draw_rectangle(0.0, 0.0, 200.0, 200.0, PURPLE);
-        draw_text("TEST", -0.2, 0.2, 0.4, RED);
-
         draw_rectangle(0.0, 0.0, 50.0, 50.0, GREEN);
         draw_rectangle(screen_width() - 50.0, 0.0, 50.0, 50.0, GREEN);
         draw_rectangle(screen_width() - 50.0, screen_height() - 50.0, 50.0, 50.0, GREEN);
