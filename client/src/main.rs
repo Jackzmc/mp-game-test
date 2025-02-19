@@ -11,9 +11,10 @@ use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::game::Action;
 use mp_game_test_common::setup_logger;
 use std::net::SocketAddr;
+use std::ops::Sub;
 use std::sync::mpsc::channel;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use macroquad::{hash, ui};
 use macroquad::ui::{root_ui, widgets, Id};
 use macroquad::ui::widgets::{Editbox, Label};
@@ -103,16 +104,18 @@ async fn main() {
             game.process_event(event);
         }
     }
-    let mut cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, screen_width(), screen_height()));
+    // let mut cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, screen_width(), screen_height()));
+    game.cam.camera.position = vec3(20.0, 20.0, 20.0);
     debug!("starting draw loop");
     let mut instant: Option<Instant> = None;
     let mut fps_calc = FpsCounter::new();
     let mut frame: u64 = 0;
+    let mut last_mouse_pos = vec2(0.0, 0.0);
     // While connected:?
-    fn draw(cam: &mut Camera2D, game: &mut GameInstance, fps_calc: &mut FpsCounter) {
+    fn draw(time_delta: &Duration, game: &mut GameInstance, fps_calc: &mut FpsCounter, last_mouse_pos: &mut Vec2) {
         clear_background(WHITE);
 
-        set_camera(cam);
+        set_camera(&mut game.cam.camera);
         // draw_grid(20, 1., BLACK, GRAY);
         draw_line(-0.4, 0.4, -0.8, 0.9, 0.05, BLUE);
         draw_rectangle(-0.3, 0.3, 0.2, 0.2, PURPLE);
@@ -124,18 +127,20 @@ async fn main() {
         draw_rectangle(screen_width() - 50.0, screen_height() - 50.0, 50.0, 50.0, GREEN);
         draw_rectangle(0.0, screen_height() - 50.0, 50.0, 50.0, GREEN);
 
+        draw_plane(vec3(0.0, 0.0, 0.0), vec2(100.0, 100.0), None, LIGHTGRAY);
+        draw_grid(3, 10.0, BLACK, WHITE);
 
         // TODO: draw players
         for i in 0..MAX_PLAYERS {
             if let Some(player) = &game.game.players[i] {
-                let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
-                draw_rectangle(pos.x, pos.y, 20.0, 20.0, BLACK);
-                // draw_cube(Vec3::new(pos.x, pos.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
+                // draw_rectangle(pos.x, pos.y, 20.0, 20.0, BLACK);
+                draw_cube(Vec3::new(player.position.x, player.position.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
+                // let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
                 draw_text(
                     &i.to_string(),
-                    pos.x,
-                    pos.y,
-                    0.1,
+                    player.position.x,
+                    player.position.y,
+                    20.0,
                     RED,
                 );
             }
@@ -149,6 +154,23 @@ async fn main() {
         if let Some(player) = game.player_mut() {
             // cam.offset = Vec2::new(player.position.x, player.position.y);
             // trace!("cam.offset={}", cam.offset);
+
+            if is_mouse_button_down(MouseButton::Left) {
+                let mouse_pos = mouse_position_local();
+                let mouse_delta = mouse_pos - *last_mouse_pos;
+                *last_mouse_pos = mouse_pos;
+                let time_delta = time_delta.as_secs_f32();
+
+                // game.cam.rotation.x += mouse_delta.x * time_delta * 1.0;
+                // game.cam.rotation.y += mouse_delta.y * time_delta * -1.0;
+                // game.cam.rotation.y = clamp(game.cam.rotation.y, -1.5, 1.5);
+
+                set_cursor_grab(true);
+                let pos = vec3(player.position.x, player.position.y, player.position.z);
+                game.cam.set_target(pos);
+            } else {
+                set_cursor_grab(false);
+            }
         }
 
         set_default_camera();
@@ -187,7 +209,9 @@ async fn main() {
             debug!("[main->loop] got event, processing: {:?}", event);
             game.process_event(event);
         }
-        draw(&mut cam, &mut game, &mut fps_calc);
+        if let Some(frame_delta) = prev_frame_time {
+            draw(&frame_delta, &mut game, &mut fps_calc, &mut last_mouse_pos);
+        }
         if frame % 10 == 0 {
             if let Some(prev_frame_time) = prev_frame_time {
                 let fps = 1.0 / prev_frame_time.as_secs_f64();

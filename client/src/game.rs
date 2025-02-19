@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
 use log::{debug, trace, warn};
+use macroquad::camera::Camera3D;
+use macroquad::math::Vec3;
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::game::{Action, CommonGameInstance, PlayerData};
 use mp_game_test_common::events_server::ServerEvent;
@@ -9,14 +11,26 @@ use crate::network::NetClient;
 pub struct GameInstance {
     pub game: CommonGameInstance,
     pub net: Option<NetClient>,
+    pub cam: GameCamera,
     client_id: Option<u32>,
     auth_id: Option<u32>,
     actions: Action
+}
+#[derive(Default)]
+pub struct GameCamera {
+    pub camera: Camera3D,
+    pub rotation: Vec3,
+}
+impl GameCamera {
+    pub fn set_target(&mut self, target: Vec3) {
+        self.camera.target = target;
+    }
 }
 impl GameInstance {
     pub fn new() -> Self {
         Self {
             game: CommonGameInstance::new(),
+            cam: GameCamera::default(),
             net: None,
             client_id: None,
             auth_id: None,

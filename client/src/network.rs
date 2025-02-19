@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvError, Sender, TryRecvError};
 use std::thread;
+use std::time::Duration;
 use log::{debug, error, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::packet::{Packet, PACKET_HEADER_SIZE};
@@ -120,6 +121,7 @@ impl NetClient  {
 pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut event_queue: EventQueue, counter: Arc<AtomicU16>, last_error: Arc<Mutex<Option<String>>>) {
     let mut buf = Vec::with_capacity(2048);
     let mut current_auth_id = 0;
+    socket.set_read_timeout(Some(Duration::from_secs(1))).expect("set_read_timeout failed");
     while end_signal.try_recv() != Err(TryRecvError::Disconnected) { // Check if we are good
         // Check if we received any data, and add it to packet queue
         buf.resize(2048, 0);
