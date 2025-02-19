@@ -181,6 +181,16 @@ async fn main() {
                 20.0,
                 DARKGRAY,
             );
+            let activity_time = game.net().stat().activity_time();
+            let (tx, rx) = (activity_time.tx.map(|t| t.elapsed().as_millis().to_string()).unwrap_or("-".to_string()),
+                            activity_time.rx.map(|t| t.elapsed().as_millis().to_string()).unwrap_or("-".to_string()));
+            draw_text(
+                &format!("{} {}", tx, rx),
+                screen_width() - dim.width - 20.0,
+                50.0,
+                20.0,
+                DARKGRAY,
+            );
         }
         draw_text(
             &game.net().process_queue_len().to_string(),

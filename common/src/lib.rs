@@ -55,6 +55,10 @@ impl NetStat {
             NetDirection::In => lock.rx = Some(Instant::now()),
         }
     }
+    pub fn activity_time(&self) -> NetContainer<Option<Instant>> {
+        let lock = self.activity_time.lock().unwrap();
+        NetContainer::new(lock.tx, lock.rx)
+    }
     /// Returns if there has been any activity (tx or rx) within time frame
     pub fn has_activity_within(&self, duration: Duration) -> bool {
         let lock = self.activity_time.lock().unwrap();

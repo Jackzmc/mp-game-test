@@ -71,6 +71,10 @@ impl NetClient  {
         }
     }
 
+    pub fn stat(&self) -> &NetStat {
+        &self.net_stat
+    }
+
     pub fn stats(&self) -> (u16, u16) {
         let val = (
             self.packet_counter.0.load(Ordering::Relaxed),
