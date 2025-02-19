@@ -79,14 +79,14 @@ impl PlayerData {
             changed = true;
         }
         if self.actions.contains(Action::Left) {
-            self.position.x -= 1.0;
+            self.position.x += 1.0;
             if self.position.x < 0.0 {
                 self.position.x = 0.0;
             }
             changed = true;
         }
         if self.actions.contains(Action::Right) {
-            self.position.x += 1.0;
+            self.position.x -= 1.0;
             if self.position.x > 1000.0 {
                 self.position.x = 1000.0;
             }

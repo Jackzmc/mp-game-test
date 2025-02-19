@@ -13,6 +13,7 @@ pub mod packet;
 pub mod events_client;
 pub mod events_server;
 pub mod game;
+pub mod network;
 
 pub const PACKET_PROTOCOL_VERSION: u32 = 0;
 /// How long to wait until we consider packet was lost and resend?
@@ -104,14 +105,14 @@ impl NetStat {
     }
 }
 
-pub trait PacketSerialize<T> {
+pub trait PacketSerialize {
     fn to_packet(&self) -> Packet {
         self.to_packet_builder().finalize()
     }
 
     fn to_packet_builder(&self) -> PacketBuilder;
 
-    fn from_packet(bytes: &Packet) -> Result<T, String>;
+    fn from_packet(bytes: &Packet) -> Result<Self, String> where Self: Sized;
 }
 
 // pub enum ClientId {

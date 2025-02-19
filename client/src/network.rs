@@ -8,7 +8,7 @@ use std::time::Duration;
 use log::{debug, error, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::packet::{Packet, PACKET_HEADER_SIZE};
-use mp_game_test_common::{NetStat, PacketSerialize, PACKET_PROTOCOL_VERSION};
+use mp_game_test_common::{NetDirection, NetStat, PacketSerialize, PACKET_PROTOCOL_VERSION};
 use mp_game_test_common::events_server::ServerEvent;
 
 pub struct NetClient {
@@ -47,17 +47,15 @@ impl NetClient  {
         let recv_thread = {
             let event_queue = event_queue.clone();
             let socket = socket.try_clone().unwrap();
-            let counter = packet_counter.0.clone();
             let net_stat = net_stat.clone();
             let last_error = last_error.clone();
 
-            thread::spawn(move || network_recv_thread(end_signal.1, socket, event_queue.clone(), counter, last_error))
+            thread::spawn(move || network_recv_thread(end_signal.1, socket, event_queue.clone(), net_stat, last_error))
         };
         let send_thread = {
             let socket = socket.try_clone().unwrap();
-            let counter = packet_counter.1.clone();
             let net_stat = net_stat.clone();
-            thread::spawn(move || network_send_thread(socket, rx, counter))
+            thread::spawn(move || network_send_thread(socket, rx, net_stat))
         };
 
         NetClient {
@@ -118,23 +116,26 @@ impl NetClient  {
     }
 }
 
-pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut event_queue: EventQueue, counter: Arc<AtomicU16>, last_error: Arc<Mutex<Option<String>>>) {
+pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut event_queue: EventQueue, mut net_stat: NetStat, last_error: Arc<Mutex<Option<String>>>) {
     let mut buf = Vec::with_capacity(2048);
     let mut current_auth_id = 0;
+    // We need a time out so we can check end_signal
+    // Otherwise, we cannot shut down (so then we can't stop the program), until we received some data
     socket.set_read_timeout(Some(Duration::from_secs(1))).expect("set_read_timeout failed");
     while end_signal.try_recv() != Err(TryRecvError::Disconnected) { // Check if we are good
         // Check if we received any data, and add it to packet queue
         buf.resize(2048, 0);
         match socket.recv(&mut buf) {
             Ok(n) => {
+                net_stat.mark_activity(NetDirection::In);
                 if n > 0 {
-                    counter.fetch_add(1, Ordering::Relaxed);
                     let pk = Packet::from(buf.as_slice());
                     trace!("[net] IN n={} {}", n, &pk.as_hex_str());
                     if !pk.is_valid() {
                         trace!("[net] INVALID pk, dropping");
                         continue;
                     }
+                    net_stat.inc_pk_count(NetDirection::In);
 
                     // ACK any seq numbers
                     let seq_num = pk.sequence_number();
@@ -183,13 +184,15 @@ pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut even
     }
     debug!("[net] recv thread: EXITED");
 }
-pub fn network_send_thread(socket: UdpSocket, mut transmit_recv: Receiver<Packet>,counter: Arc<AtomicU16>) {
+pub fn network_send_thread(socket: UdpSocket, mut transmit_recv: Receiver<Packet>, mut net_stat: NetStat) {
     loop {
         // Check if there's any data we need to send out
+        // Unlike recv_thread, when we quit, we send a disconnect packet, so this shouldn't block
         if let Ok(pk) = transmit_recv.recv() {
             trace!("[net] OUT pk_len={} py_len={} {}", pk.buf_len(), pk.payload_len(), pk.as_hex_str());
             socket.send(pk.as_slice()).unwrap();
-            counter.fetch_add(1, Ordering::Relaxed);
+            net_stat.inc_pk_count(NetDirection::Out);
+            net_stat.mark_activity(NetDirection::Out);
         } else {
             debug!("[net] send_thread: channel closed, exiting");
             break;

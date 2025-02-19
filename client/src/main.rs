@@ -129,8 +129,10 @@ async fn main() {
         for i in 0..MAX_PLAYERS {
             if let Some(player) = &game.game.players[i] {
                 // draw_rectangle(pos.x, pos.y, 20.0, 20.0, BLACK);
-                draw_cube(Vec3::new(player.position.x, player.position.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
+                draw_cube(vec3(player.position.x, player.position.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
                 // let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
+                let end = vec3(player.position.x + 0.0, player.position.y + 5.0, 1.0);
+                draw_line_3d(Vec3::new(player.position.x, player.position.y, 1.0), end, ORANGE);
                 draw_text(
                     &i.to_string(),
                     player.position.x,
@@ -219,11 +221,21 @@ async fn main() {
     game.disconnect("Disconnect");
 }
 
-fn set_action(game: &mut GameInstance, action: Action, key_code: KeyCode) {
+enum ActionResult {
+    Activated,
+    Deactivated,
+    None
+}
+
+fn set_action(game: &mut GameInstance, action: Action, key_code: KeyCode) -> ActionResult {
     if is_key_pressed(key_code) {
         game.set_action(action, true).ok();
+        ActionResult::Activated
     } else if game.has_action(action) && is_key_released(key_code) {
         game.set_action(action, false).ok();
+        ActionResult::Deactivated
+    } else {
+        ActionResult::None
     }
 }
 

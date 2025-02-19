@@ -29,7 +29,7 @@ impl ServerEvent {
         }
     }
 }
-impl PacketSerialize<ServerEvent> for ServerEvent {
+impl PacketSerialize for ServerEvent {
     // Serializing to send to client
     fn to_packet_builder(&self) -> PacketBuilder {
         let mut pk = PacketBuilder::new(self.get_packet_type());

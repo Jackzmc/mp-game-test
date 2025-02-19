@@ -14,6 +14,7 @@ use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::packet::{Packet, PacketBuilder};
 use mp_game_test_common::{unix_timestamp, PacketSerialize, PACKET_PROTOCOL_VERSION};
 use mp_game_test_common::def::{Position, MAX_PLAYERS};
+use mp_game_test_common::network::Network;
 use crate::network::{NetServer, OutPacket};
 use crate::TICK_RATE;
 
@@ -82,7 +83,7 @@ impl GameInstance {
         let mut per_tick_duration = Duration::from_millis(ms_per_tick as u64);
         Self {
             // TODO: make socket
-            net: NetServer::new(),
+            net: NetServer::new("0.0.0.0:3566".parse().unwrap()),
             game: CommonGameInstance::new(),
             client_data: [const { None }; MAX_PLAYERS],
 
@@ -325,7 +326,9 @@ impl GameInstance {
         let addr_list = self._get_addr_list();
         let len = addr_list.len();
         debug!("EVENT[{}B] BROADCAST[{}] {:?}", buf.len(), len, event);
-        self.net.send_multiple(pk, addr_list).ok();
+        for addr in addr_list {
+            self.send_to(&event, addr);
+        }
         len
     }
 
@@ -342,23 +345,16 @@ impl GameInstance {
     }
 
     /// Send an event to a specific client
-    pub fn send_to(&mut self, event: &ServerEvent, addr: SocketAddr) {
-        let pk = event.to_packet();
-        let buf = pk.as_slice();;
-        debug!("EVENT[{}B] {:?} {:?}", buf.len(), addr, event);
-        self.net.send(pk, addr).ok();
+    pub fn send_to(&self, event: &ServerEvent, addr: SocketAddr) {
+        self.net.send_to(event, addr).ok();
     }
 
     /// Sends an event to a specified client, returning Ok(sequence_number) or error if client not found
     pub fn send_to_reliable(&mut self, event: ServerEvent, client_id: &ClientId) -> Result<u16, anyhow::Error> {
-        if let Some((_, client)) = self.get_client_mut(client_id) {
-            let addr = client.addr.clone();
-            let entry = self.net.add_reliable_packet(addr, event.clone());
-            debug!("EVENT[{}B] {:?} {:?}", entry.packet.buf_len(), addr, event);
-            self.net.send(entry.packet.clone(), addr).ok();
-            return Ok(entry.seq_id);
-        }
-        Err(anyhow!("Could not find client"))
+        let addr = self.get_client_mut(client_id).map(|(_, client)| {
+            client.addr.clone()
+        }).ok_or(anyhow!("Could not find client"))?;
+        self.net.send_to_reliable(event, addr).map_err(|e| anyhow!(e))
     }
 
     /// Process a login packet, sending necessary events and registering client/player
