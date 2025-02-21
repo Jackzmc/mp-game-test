@@ -476,6 +476,7 @@ name = "mp-game-test-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bitflags 2.8.0",
  "clap",
  "console",
  "log",

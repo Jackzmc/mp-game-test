@@ -1,10 +1,12 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::ErrorKind;
 use std::net::SocketAddr;
+use std::sync::{atomic, Arc};
+use std::sync::atomic::AtomicBool;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use anyhow::anyhow;
-use log::{debug, trace, warn};
+use anyhow::{anyhow, Error};
+use log::{debug, info, trace, warn};
 use rand::random;
 use tokio::net::UdpSocket;
 use tokio::time::{interval, Interval};
@@ -14,7 +16,9 @@ use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::packet::{Packet, PacketBuilder};
 use mp_game_test_common::{unix_timestamp, PacketSerialize, PACKET_PROTOCOL_VERSION};
 use mp_game_test_common::def::{Position, MAX_PLAYERS};
+use mp_game_test_common::events_server::ServerEvent::Disconnect;
 use mp_game_test_common::network::Network;
+use crate::cmds::ServerCommand;
 use crate::network::{NetServer, OutPacket};
 use crate::TICK_RATE;
 
@@ -25,13 +29,13 @@ static CLIENT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 static SLEEP_INTERVAL: Duration = Duration::from_millis(1000);
 
 
-struct ClientData {
-    auth_id: u32,
+pub(crate) struct ClientData {
+    pub(crate) auth_id: u32,
     addr: SocketAddr,
     last_timestamp: u32,
     seq_number: u16,
     reliable_queue: VecDeque<ReliableEntry>,
-    last_packet_time: Instant
+    last_packet_time: Instant,
 }
 #[derive(Clone)]
 struct ReliableEntry {
@@ -73,7 +77,10 @@ pub struct GameInstance {
     per_tick_duration: Duration,
     tick_count: u8,
 
-    sleep_interval: Option<Interval>
+    sleep_interval: Option<Interval>,
+    cmds: HashMap<String, Arc<Box<dyn ServerCommand>>>,
+
+    pub shutdown_requested: Arc<AtomicBool>
 }
 
 impl GameInstance {
@@ -92,8 +99,32 @@ impl GameInstance {
             per_tick_duration,
             tick_count: 0,
 
-            sleep_interval: Some(interval(Duration::from_millis(500)))
+            sleep_interval: Some(interval(Duration::from_millis(500))),
+            cmds: HashMap::new(),
+
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn reg_cmd(&mut self, cmd_name: &str, command: Box<dyn ServerCommand>) {
+        debug!("reg cmd {}", cmd_name);
+        self.cmds.insert(cmd_name.to_string(), Arc::new(command));
+    }
+    pub fn reg_cmd_ex(&mut self, cmd_names: &[&str], command: impl ServerCommand) {
+        todo!();
+        // let command  = Arc::new(Box::new(command));
+        // for cmd_name in cmd_names {
+        //
+        //     // self.reg_cmd(cmd_name, command.clone());
+        // }
+    }
+
+    pub fn get_cmds(&self) -> Vec<String> {
+        self.cmds.keys().cloned().collect()
+    }
+
+    pub fn get_cmd(&self, cmd_name: &str) -> Option<Arc<Box<dyn ServerCommand>>> {
+        self.cmds.get(cmd_name).cloned()
     }
 
     /// Overwrites the game tick interval with a specific duration
@@ -157,7 +188,7 @@ impl GameInstance {
         for i in 0..MAX_PLAYERS {
             if let Some(client) = &mut self.client_data[i] {
                 if client.has_timed_out() {
-                    self.disconnect_player(&ClientId::ClientIndex(i as u32), "Timed out".to_string());
+                    self.disconnect_player(&ClientId::ClientIndex(i as u32), "Timed out".to_string()).ok();
                     continue
                 }
             }
@@ -189,8 +220,18 @@ impl GameInstance {
         }
     }
 
+    pub fn disconnect_player(&mut self, client_id: &ClientId, reason: String) -> Result<u16, Error> {
+        if let Some(client_index) = self.get_client_index(client_id) {
+            let event = ServerEvent::Disconnect {
+                client_index,
+                reason,
+            };
+            return self.send_to_reliable(event, client_id)
+        }
+        Err(anyhow!("Client does not exist"))
+    }
 
-    pub fn disconnect_player(&mut self, client_id: &ClientId, reason: String) {
+    pub fn remove_player(&mut self, client_id: &ClientId, reason: String) {
         if let Some(index) = self.get_client_index(client_id) {
             debug!("disconnecting client index {}. reason={}", index, reason);
             self.client_data[index as usize] = None;
@@ -221,10 +262,17 @@ impl GameInstance {
         (client_index, auth_id)
     }
 
-    pub fn for_all_players<F>(&self, func: F) where F: Fn(u32, &ClientData) {
+    pub fn for_all_clients<F>(&self, func: F) where F: Fn(u32, &ClientData) {
         for i in 0..MAX_PLAYERS {
             if let Some(client) = &self.client_data[i] {
                 func(i as u32, client);
+            }
+        }
+    }
+    pub fn for_all_players<F>(&self, func: F) where F: Fn(u32, &ClientData, &PlayerData) {
+        for i in 0..MAX_PLAYERS {
+            if let Some(client) = &self.client_data[i] {
+                func(i as u32, client, self.game.players[i].as_ref().unwrap());
             }
         }
     }
@@ -251,9 +299,6 @@ impl GameInstance {
     }
 
     pub fn get_client_index(&self, client_id: &ClientId) -> Option<u32> {
-        if let ClientId::ClientIndex(index) = client_id {
-            return Some(*index);
-        }
         for i in 0..MAX_PLAYERS {
             if let Some(client) = &self.client_data[i] {
                 if let ClientId::AuthId(auth_id) = client_id {
@@ -299,8 +344,13 @@ impl GameInstance {
         // None
     }
 
-    pub fn exec_server_cmd(&mut self, command: &str) -> Result<(), String> {
-        Err(format!("Unknown command: \"{}\"", command))
+    pub fn exec_server_cmd(&mut self, command: &str, args: &[String]) -> Result<(), String> {
+        match self.get_cmd(command) {
+            Some(cmd) => {
+                cmd.run(self, 0, command, args).then(|| ()).ok_or("Command failed".to_string())
+            },
+            None => Err(format!("Unknown command: \"{}\"", command))
+        }
     }
 
     pub fn exec_client_cmd(&mut self, command: &str, client: &ClientId) -> Result<(), String> {
@@ -323,6 +373,24 @@ impl GameInstance {
             }
         }
         addr_list
+    }
+
+    pub fn shutdown(&mut self) {
+        self.shutdown_requested.store(true, atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(atomic::Ordering::Relaxed)
+    }
+
+    pub fn _shutdown(mut self) {
+        info!("Exit triggered");
+        for i in 0..MAX_PLAYERS {
+            // disconnect_player checks already
+            self.disconnect_player(&ClientId::ClientIndex(i as u32), "Server is closing".to_string()).ok();
+
+        }
+        self.net.end();
     }
 
     /// Sends an event to all clients

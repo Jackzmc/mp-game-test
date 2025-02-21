@@ -2,9 +2,9 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::mpsc::{channel, Receiver, RecvError, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvError, Sender, TryRecvError};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use log::{debug, error, info, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
@@ -17,7 +17,8 @@ pub struct NetServer {
     event_queue: EventQueue,
     socket: UdpSocket,
     // rx: Sender<ClientEvent>,
-    transmit_out_tx: Sender<OutPacket>,
+    transmit_out_tx: Option<Sender<OutPacket>>,
+    recv_end_signal: Option<Sender<()>>,
     send_thread: thread::JoinHandle<()>,
     recv_thread: thread::JoinHandle<()>,
 
@@ -47,6 +48,7 @@ impl NetServer {
         let event_queue = Arc::new(Mutex::new(VecDeque::new()));
         let reliable_queue = Arc::new(Mutex::new(ReliableQueue::new()));
         let net_stat = NetStat::new();
+        let end_signal = channel::<()>();
 
         let send_thread = {
             let socket = sock.try_clone().unwrap();
@@ -58,13 +60,14 @@ impl NetServer {
             let socket = sock.try_clone().unwrap();
             let reliable_queue = reliable_queue.clone();
             let net_stat = net_stat.clone();
-            thread::spawn(move || network_recv_thread(socket, event_queue.clone(), reliable_queue, net_stat))
+            thread::spawn(move || network_recv_thread(end_signal.1, socket, event_queue.clone(), reliable_queue, net_stat))
         };
 
         info!("server listening at UDP {:?}", sock.local_addr().unwrap());
 
         NetServer {
-            transmit_out_tx: tx,
+            transmit_out_tx: Some(tx),
+            recv_end_signal: Some(end_signal.0),
             recv_thread,
             send_thread,
             event_queue,
@@ -73,6 +76,15 @@ impl NetServer {
             seq_number: 0,
             net_stat
         }
+    }
+
+    pub fn end(mut self) {
+        // Drop senders, which the threads will then end after noticing its dropped
+        self.transmit_out_tx = None;
+        self.recv_end_signal = None;
+
+        self.send_thread.join().unwrap();
+        self.recv_thread.join().unwrap();
     }
 
     pub(crate) fn stat(&self) -> &NetStat {
@@ -91,7 +103,8 @@ impl NetServer {
         let pk = event.to_packet();
         let buf = pk.as_slice();;
         debug!("EVENT[{}B] {:?} {:?}", buf.len(), addr, event);
-        self.transmit_out_tx.send(OutPacket::Single(pk, addr)).map_err(|e| e.to_string())
+        let tx = self.transmit_out_tx.as_ref().ok_or("shutdown in progress".to_string())?;
+        tx.send(OutPacket::Single(pk, addr)).map_err(|e| e.to_string())
     }
 
     /// Sends an event to a specified addr, returning Ok(sequence_number)
@@ -114,13 +127,15 @@ impl NetServer {
 }
 
 pub fn network_recv_thread(
+    end_signal: Receiver<()>,
     socket: UdpSocket,
     mut event_queue: EventQueue,
     reliable_queue: Arc<Mutex<ReliableQueue>>,
     mut net_stat: NetStat
 ) {
     let mut buf = Vec::with_capacity(2048);
-    loop {
+    socket.set_read_timeout(Some(Duration::from_secs(1))).expect("set_read_timeout failed");
+    while end_signal.try_recv() != Err(TryRecvError::Disconnected) { // Check if we are good
         // Check if we received any data, and add it to packet queue
         buf.resize(2048, 0);
         match socket.recv_from(&mut buf) {
@@ -165,7 +180,11 @@ pub fn network_recv_thread(
                 }
             }
             Err(e) => {
-                error!("[net] recv error: {}", e)
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    error!("[net] recv error: {}", e);
+                    // let mut lock = last_error.lock().unwrap();
+                    // *lock = Some(e.to_string());
+                }
             }
         }
 
