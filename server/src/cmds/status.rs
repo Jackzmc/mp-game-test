@@ -1,10 +1,10 @@
-use crate::cmds::ServerCommand;
+use crate::cmds::{CommandArgs, ServerCommand};
 use crate::game::GameInstance;
 
 #[derive(Default)]
 pub struct StatusCommand {}
 impl ServerCommand for StatusCommand {
-    fn run(&self, game: &mut GameInstance, client_index: u32, command: &str, args: &[String]) -> bool {
+    fn run(&self, game: &mut GameInstance, client_index: u32, command: CommandArgs) -> bool {
         println!(
             "{0: <6} | {1: <11} | {2: <32}",
             "index", "auth_id", "name"

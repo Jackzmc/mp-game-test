@@ -21,7 +21,7 @@ use tokio::time::{interval, MissedTickBehavior};
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::packet::Packet;
-use crate::cmds::{parse_args, register_commands};
+use crate::cmds::{register_commands, CommandArgs};
 use crate::game::{GameInstance, PacketResponse};
 
 const TICK_RATE: u8 = 30;
@@ -63,8 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             input = input.trim_end_matches('\n').to_string();
             println!("> {}", input);
 
-            let (cmd, args) = parse_args(&input);
-            if let Err(e) = game.exec_server_cmd(&cmd, &args) {
+            if let Err(e) = game.exec_server_cmd(&input) {
                 error!(" {}", e);
             }
 

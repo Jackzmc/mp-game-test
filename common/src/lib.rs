@@ -59,6 +59,13 @@ impl NetStat {
         let lock = self.activity_time.lock().unwrap();
         NetContainer::new(lock.tx, lock.rx)
     }
+    pub fn activity_time_as_secs_f32(&self) -> NetContainer<Option<String>> {
+        let lock = self.activity_time.lock().unwrap();
+        NetContainer::new(
+            lock.tx.map(|a| a.elapsed().as_secs_f32().to_string()),
+            lock.rx.map(|a| a.elapsed().as_secs_f32().to_string()),
+        )
+    }
     /// Returns if there has been any activity (tx or rx) within time frame
     pub fn has_activity_within(&self, duration: Duration) -> bool {
         let lock = self.activity_time.lock().unwrap();

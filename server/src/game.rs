@@ -18,7 +18,7 @@ use mp_game_test_common::{unix_timestamp, PacketSerialize, PACKET_PROTOCOL_VERSI
 use mp_game_test_common::def::{Position, MAX_PLAYERS};
 use mp_game_test_common::events_server::ServerEvent::Disconnect;
 use mp_game_test_common::network::Network;
-use crate::cmds::ServerCommand;
+use crate::cmds::{CommandArgs, ServerCommand};
 use crate::network::{NetServer, OutPacket};
 use crate::TICK_RATE;
 
@@ -80,7 +80,9 @@ pub struct GameInstance {
     sleep_interval: Option<Interval>,
     cmds: HashMap<String, Arc<Box<dyn ServerCommand>>>,
 
-    pub shutdown_requested: Arc<AtomicBool>
+    pub shutdown_requested: Arc<AtomicBool>,
+
+    start_time: Instant,
 }
 
 impl GameInstance {
@@ -103,7 +105,12 @@ impl GameInstance {
             cmds: HashMap::new(),
 
             shutdown_requested: Arc::new(AtomicBool::new(false)),
+            start_time: Instant::now(),
         }
+    }
+
+    pub fn uptime(&self) -> Duration {
+        self.start_time.elapsed()
     }
 
     pub fn reg_cmd(&mut self, cmd_name: &str, command: Box<dyn ServerCommand>) {
@@ -344,10 +351,11 @@ impl GameInstance {
         // None
     }
 
-    pub fn exec_server_cmd(&mut self, command: &str, args: &[String]) -> Result<(), String> {
-        match self.get_cmd(command) {
+    pub fn exec_server_cmd(&mut self, command: &str) -> Result<(), String> {
+        let args = CommandArgs::from_line(command);
+        match self.get_cmd(args.name()) {
             Some(cmd) => {
-                cmd.run(self, 0, command, args).then(|| ()).ok_or("Command failed".to_string())
+                cmd.run(self, 0, args).then(|| ()).ok_or("Command failed".to_string())
             },
             None => Err(format!("Unknown command: \"{}\"", command))
         }
