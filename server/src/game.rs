@@ -299,6 +299,14 @@ impl GameInstance {
         // None
     }
 
+    pub fn exec_server_cmd(&mut self, command: &str) -> Result<(), String> {
+        Err(format!("Unknown command: \"{}\"", command))
+    }
+
+    pub fn exec_client_cmd(&mut self, command: &str, client: &ClientId) -> Result<(), String> {
+        Err(format!("Unknown command: \"{}\"", command))
+    }
+
     // fn get_client_player_mut(&mut self, auth_id: u32) -> Option<(&mut ClientData, &mut PlayerData)> {
     //     let client_id = self.get_client_id_from_auth_id(auth_id)?;
     //     let client = self.client_data[client_id as usize].as_mut().expect("auth id client index mismatch for client data");
