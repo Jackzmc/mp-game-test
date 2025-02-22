@@ -59,8 +59,8 @@ mod exit;
 mod debug;
 
 pub fn register_commands(game: &mut GameInstance) {
-    game.reg_cmd("help", Box::new(HelpCommand::default()));
-    game.reg_cmd("status", Box::new(StatusCommand::default()));
-    game.reg_cmd("exit", Box::new(ExitCommand::default()));
-    game.reg_cmd("debug", Box::new(debug::Command::default()))
+    game.reg_cmd("help", Box::new(HelpCommand::default()), CmdFlag::empty());
+    game.reg_cmd("status", Box::new(StatusCommand::default()), CmdFlag::ClientCanExecute);
+    game.reg_cmd("exit", Box::new(ExitCommand::default()), CmdFlag::empty());
+    game.reg_cmd("debug", Box::new(debug::Command::default()), CmdFlag::ClientCanExecute);
 }

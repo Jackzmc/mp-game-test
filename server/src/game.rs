@@ -18,7 +18,7 @@ use mp_game_test_common::{unix_timestamp, PacketSerialize, PACKET_PROTOCOL_VERSI
 use mp_game_test_common::def::{Position, MAX_PLAYERS};
 use mp_game_test_common::events_server::ServerEvent::Disconnect;
 use mp_game_test_common::network::Network;
-use crate::cmds::{CommandArgs, ServerCommand};
+use crate::cmds::{CmdFlag, CommandArgs, ServerCommand};
 use crate::network::{NetServer, OutPacket};
 use crate::TICK_RATE;
 
@@ -42,6 +42,11 @@ struct ReliableEntry {
     pub seq_id: u16,
     pub packet: Packet,
     pub sent_time: Instant
+}
+
+struct CommandContainer {
+    command: Arc<Box<dyn ServerCommand>>,
+    flags: CmdFlag
 }
 
 enum ClientId {
@@ -78,7 +83,8 @@ pub struct GameInstance {
     tick_count: u8,
 
     sleep_interval: Option<Interval>,
-    cmds: HashMap<String, Arc<Box<dyn ServerCommand>>>,
+    cmds: HashMap<String, CommandContainer>,
+    cmd_aliases: HashMap<String, String>,
 
     pub shutdown_requested: Arc<AtomicBool>,
 
@@ -103,6 +109,7 @@ impl GameInstance {
 
             sleep_interval: Some(interval(Duration::from_millis(500))),
             cmds: HashMap::new(),
+            cmd_aliases: HashMap::new(),
 
             shutdown_requested: Arc::new(AtomicBool::new(false)),
             start_time: Instant::now(),
@@ -113,25 +120,44 @@ impl GameInstance {
         self.start_time.elapsed()
     }
 
-    pub fn reg_cmd(&mut self, cmd_name: &str, command: Box<dyn ServerCommand>) {
+    pub fn reg_cmd(&mut self, cmd_name: &str, command: Box<dyn ServerCommand>, flags: CmdFlag) {
         debug!("reg cmd {}", cmd_name);
-        self.cmds.insert(cmd_name.to_string(), Arc::new(command));
+        let command = Arc::new(command);
+        let entry = CommandContainer {
+            command,
+            flags
+        };
+        self.cmds.insert(cmd_name.to_string(), entry);
+        // self.cmds.entry(cmd_name.to_string()).insert_entry(entry)
     }
-    pub fn reg_cmd_ex(&mut self, cmd_names: &[&str], command: impl ServerCommand) {
-        todo!();
-        // let command  = Arc::new(Box::new(command));
-        // for cmd_name in cmd_names {
-        //
-        //     // self.reg_cmd(cmd_name, command.clone());
-        // }
+    pub fn reg_cmd_ex(&mut self, cmd_names: &[&str], command: Box<dyn ServerCommand>, flags: CmdFlag)
+        -> Result<(), anyhow::Error>
+    {
+        if cmd_names.len() == 0 {
+            return Err(anyhow!("cmd_names must have at least one element"));
+        }
+        let cmd_name = cmd_names.first().unwrap();
+        self.reg_cmd(cmd_name, command, flags);
+        for alias in cmd_names {
+            self.cmd_aliases.insert(alias.to_string(), cmd_name.to_string());
+        }
+        Ok(())
     }
 
+    /// Returns a list of all command names (excluding aliases)
     pub fn get_cmds(&self) -> Vec<String> {
         self.cmds.keys().cloned().collect()
     }
 
+    /// Returns an instance of a command by name or alias
     pub fn get_cmd(&self, cmd_name: &str) -> Option<Arc<Box<dyn ServerCommand>>> {
-        self.cmds.get(cmd_name).cloned()
+        self.cmds.get(cmd_name)
+            .map(|e| e.command.clone())
+            // If not found, check the aliases:
+            .or_else(|| self.cmd_aliases.get(cmd_name)
+                .and_then(|cmd_name| self.cmds.get(cmd_name))
+                .map(|e| e.command.clone())
+            )
     }
 
     /// Overwrites the game tick interval with a specific duration
@@ -233,14 +259,15 @@ impl GameInstance {
                 client_index,
                 reason,
             };
+            self.remove_player(client_id);
             return self.send_to_reliable(event, client_id)
         }
         Err(anyhow!("Client does not exist"))
     }
 
-    pub fn remove_player(&mut self, client_id: &ClientId, reason: String) {
+    pub fn remove_player(&mut self, client_id: &ClientId) {
         if let Some(index) = self.get_client_index(client_id) {
-            debug!("disconnecting client index {}. reason={}", index, reason);
+            debug!("disconnecting client index {}", index);
             self.client_data[index as usize] = None;
             self.game.players[index as usize] = None;
             // TODO: send disconnect packet
@@ -351,19 +378,16 @@ impl GameInstance {
         // None
     }
 
-    pub fn exec_server_cmd(&mut self, command: &str) -> Result<(), String> {
+    pub fn exec_cmd(&mut self, command: &str, client_index: Option<u32>) -> Result<(), String> {
         let args = CommandArgs::from_line(command);
         match self.get_cmd(args.name()) {
             Some(cmd) => {
-                cmd.run(self, 0, args).then(|| ()).ok_or("Command failed".to_string())
+                cmd.run(self, client_index.unwrap_or(0), args).then(|| ()).ok_or("Command failed".to_string())
             },
             None => Err(format!("Unknown command: \"{}\"", command))
         }
     }
 
-    pub fn exec_client_cmd(&mut self, command: &str, client: &ClientId) -> Result<(), String> {
-        Err(format!("Unknown command: \"{}\"", command))
-    }
 
     // fn get_client_player_mut(&mut self, auth_id: u32) -> Option<(&mut ClientData, &mut PlayerData)> {
     //     let client_id = self.get_client_id_from_auth_id(auth_id)?;
@@ -511,6 +535,15 @@ impl GameInstance {
                         reason,
                     };
                     self.broadcast_reliable(event);
+                },
+                ClientEvent::Command { command, id} => {
+                    let index = player.client_index;
+                    let result = self.exec_cmd(&command, Some(index));
+                    let event = ServerEvent::CommandResult {
+                        id,
+                        result: result.is_ok(),
+                    };
+                    self.send_to_reliable(event, &client_id).ok();
                 }
             }
             return PacketResponse::Ok

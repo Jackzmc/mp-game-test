@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let term = console::Term::stdout();
 
-    {
+    { // Handle Ctrl+C
         let pending_shutdown = game.shutdown_requested.clone();
         tokio::spawn(async move {
             tokio::signal::ctrl_c().await.unwrap();
@@ -57,13 +57,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let stdin = setup_stdin_channel();
 
+    // Main game loop
     while !game.is_shutdown_requested() {
         if let Ok(mut input) = stdin.try_recv() {
             term.clear_last_lines(2).ok();
             input = input.trim_end_matches('\n').to_string();
             println!("> {}", input);
 
-            if let Err(e) = game.exec_server_cmd(&input) {
+            if let Err(e) = game.exec_cmd(&input, None) {
                 error!(" {}", e);
             }
 
@@ -76,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// Sends stdin lines to channel. Needs its own thread to prevent read_line blocking main loop
 fn setup_stdin_channel() -> Receiver<String> {
     let (tx, rx) = channel();
     let mut input = String::new();
