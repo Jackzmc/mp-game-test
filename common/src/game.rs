@@ -2,13 +2,14 @@ use std::fmt::{Debug, Formatter};
 use bitflags::bitflags;
 use int_enum::IntEnum;
 use crate::ClientIndex;
-use crate::def::{Position, MAX_PLAYERS};
+use crate::def::{Vector3, MAX_PLAYERS};
 use crate::events_server::ServerEvent;
 
 #[derive(Debug)]
 pub struct PlayerData{
     // pub client: C,
-    pub position: Position,
+    pub position: Vector3,
+    pub angles: Vector3,
     pub name: String,
     pub client_index: u32,
     pub state: PlayerState,
@@ -44,10 +45,11 @@ bitflags! {
 
 
 impl PlayerData {
-    pub fn new(client_id: u32, name: String, position: Position) -> Self{
+    pub fn new(client_id: u32, name: String, position: Vector3, angles: Vector3) -> Self{
         PlayerData {
             // client: client_data,
             position,
+            angles,
             name,
             client_index: client_id,
             state: PlayerState::default(),
@@ -58,7 +60,8 @@ impl PlayerData {
         ServerEvent::PlayerSpawn {
             client_index: self.client_index,
             name: self.name.clone(),
-            position: self.position
+            position: self.position,
+            angles: self.angles,
         }
     }
 
@@ -135,10 +138,9 @@ impl CommonGameInstance {
         None
     }
 
-    pub fn set_player(&mut self, client_index: u32, player: Option<PlayerData>) -> &PlayerData {
+    pub fn set_player(&mut self, client_index: u32, player: Option<PlayerData>) {
         self._check_player_id(client_index);
         self.players[client_index as usize] = player;
-        self.players[client_index as usize].as_ref().unwrap()
     }
 
     pub fn get_player(&self, client_index: u32) -> &Option<PlayerData> {

@@ -31,6 +31,12 @@ const TICK_RATE: u8 = 30;
 struct Args {
     #[arg(long, alias = "tickrate", default_value_t = 30)]
     tick_rate: u8,
+
+    #[arg(long, default_value = "0.0.0.0")]
+    ip: String,
+
+    #[arg(long, short = 'p', default_value_t = 3566)]
+    port: u16
 }
 
 #[tokio::main]

@@ -1,5 +1,5 @@
 use log::trace;
-use crate::def::Position;
+use crate::def::Vector3;
 use crate::game::Action;
 use crate::packet::{Packet, PacketBuilder};
 use crate::PacketSerialize;
@@ -8,7 +8,7 @@ use crate::PacketSerialize;
 pub enum ClientEvent {
     Ack { seq_number: u16 },
     Login { version: u32, name: String }, // 0x0
-    PerformAction { actions: Action }, // ox1
+    PerformAction { actions: Action, angles: Vector3 }, // ox1
     Disconnect { reason: String},
 }
 impl ClientEvent {
@@ -35,9 +35,10 @@ impl PacketSerialize for ClientEvent {
                 buf.write_u32(*version);
                 buf.write_string(name);
             },
-            ClientEvent::PerformAction { actions } => {
+            ClientEvent::PerformAction { actions, angles } => {
                 let buf = pk.buf_mut();
                 buf.write_u32(actions.bits());
+                buf.write_f32_vec(angles.to_vec())
             },
             ClientEvent::Disconnect { reason } => {
                 let buf = pk.buf_mut();
@@ -69,6 +70,7 @@ impl PacketSerialize for ClientEvent {
                 trace!("reading 0x2: Client Move");
                 Ok(ClientEvent::PerformAction {
                     actions: Action::from_bits_retain(buf.read_u32()),
+                    angles: Vector3::new(buf.read_f32(), buf.read_f32(), buf.read_f32())
                 })
             },
             0x3 => {

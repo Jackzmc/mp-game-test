@@ -6,7 +6,7 @@ use crate::game::GameInstance;
 use crate::network::NetClient;
 use macroquad::audio::play_sound;
 use macroquad::prelude::*;
-use mp_game_test_common::def::{Position, MAX_PLAYERS};
+use mp_game_test_common::def::{Vector3, MAX_PLAYERS};
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::game::Action;
 use mp_game_test_common::setup_logger;
@@ -31,6 +31,20 @@ struct Args {
 
     #[arg(long)]
     name: Option<String>
+}
+
+struct Player {
+    name: String,
+}
+impl Player {
+    pub fn draw(pos: Vec3) {
+        let size = 0.4;
+        let size_vec = vec3(size, size, size);
+        draw_cube(vec3(pos.x, pos.y + size, pos.z), size_vec, None, BLACK);
+        draw_cube(vec3(pos.x, pos.y - size, pos.z), size_vec, None, BLACK);
+        draw_cube(vec3(pos.x + size, pos.y, pos.z), size_vec, None, BLACK);
+        draw_cube(vec3(pos.x - size, pos.y, pos.z), size_vec, None, BLACK);
+    }
 }
 
 fn window_conf() -> Conf {
@@ -97,7 +111,7 @@ async fn main() {
     let server_ip = main_menu.ip_addr().unwrap();
     let name = main_menu.name().to_owned();
 
-    let mut pos = Position::new(0.0, 0.0, 0.0);
+    let mut pos = Vector3::new(0.0, 0.0, 0.0);
     while !game.is_authenticated() {
         if let Some(event) = game.net_mut().next_event() {
             debug!("[main->login] got event, processing: {:?}", event);
@@ -128,8 +142,9 @@ async fn main() {
         // TODO: draw players
         for i in 0..MAX_PLAYERS {
             if let Some(player) = &game.game.players[i] {
+                Player::draw(Vec3::new(player.position.x, player.position.y, 1.0));
                 // draw_rectangle(pos.x, pos.y, 20.0, 20.0, BLACK);
-                draw_cube(vec3(player.position.x, player.position.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
+                // draw_cube(vec3(player.position.x, player.position.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
                 // let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
                 let end = vec3(player.position.x + 0.0, player.position.y + 5.0, 1.0);
                 draw_line_3d(Vec3::new(player.position.x, player.position.y, 1.0), end, ORANGE);

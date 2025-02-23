@@ -131,9 +131,16 @@ pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut even
         buf.resize(2048, 0);
         match socket.recv(&mut buf) {
             Ok(n) => {
+                buf.truncate(n);
                 net_stat.mark_activity(NetDirection::In);
                 if n > 0 {
-                    let pk = Packet::from(buf.as_slice());
+                    let pk = match Packet::try_decompress_from_slice(buf.as_slice()) {
+                        Ok(pk) => pk,
+                        Err(e) => {
+                            warn!("[net] dropping packet: decompression failed: {}", e);
+                            continue;
+                        }
+                    };
                     trace!("[net] IN n={} {}", n, &pk.as_hex_str());
                     if !pk.is_valid() {
                         trace!("[net] INVALID pk, dropping");
@@ -193,8 +200,11 @@ pub fn network_send_thread(socket: UdpSocket, mut transmit_recv: Receiver<Packet
         // Check if there's any data we need to send out
         // Unlike recv_thread, when we quit, we send a disconnect packet, so this shouldn't block
         if let Ok(pk) = transmit_recv.recv() {
-            trace!("[net] OUT pk_len={} py_len={} {}", pk.buf_len(), pk.payload_len(), pk.as_hex_str());
-            socket.send(pk.as_slice()).unwrap();
+            let bytes = pk.compress().unwrap();
+            trace!("cursor={}", pk.buf().offset_pos());
+            trace!("[net] OUT len=({}uncomp,{}comp) py_len={} {}", pk.buf_len(), bytes.len(), pk.payload_len(), pk.as_hex_str());
+            debug!("{:x?}", bytes);
+            socket.send(&bytes).unwrap();
             net_stat.inc_pk_count(NetDirection::Out);
             net_stat.mark_activity(NetDirection::Out);
         } else {

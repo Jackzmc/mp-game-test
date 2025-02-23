@@ -1,14 +1,14 @@
 use int_enum::IntEnum;
 use log::trace;
-use crate::def::Position;
+use crate::def::Vector3;
 use crate::packet::{Packet, PacketBuilder};
 use crate::PacketSerialize;
 
 #[derive(Debug, Clone)]
 pub enum ServerEvent {
     Login { client_index: u32, auth_id: u32 }, // 0x1
-    Move { client_index: u32, position: Position }, // 0x2
-    PlayerSpawn { client_index: u32, name: String, position: Position }, //0x3,
+    Move { client_index: u32, position: Vector3, angles: Vector3, velocity: Vector3 }, // 0x2
+    PlayerSpawn { client_index: u32, name: String, position: Vector3, angles: Vector3 }, //0x3,
     Disconnect { client_index: u32, reason: String },
 }
 impl ServerEvent {
@@ -39,19 +39,28 @@ impl PacketSerialize for ServerEvent {
                 buf.write_u32(*client_index);
                 buf.write_u32(*auth_id);
             },
-            ServerEvent::Move { client_index, position } => {
+            ServerEvent::Move { client_index, position, angles, velocity } => {
                 let buf = pk.buf_mut();
                 buf.write_u32(*client_index);
                 buf.write_f32(position.x);
                 buf.write_f32(position.y);
                 buf.write_f32(position.z);
+                buf.write_f32(angles.x);
+                buf.write_f32(angles.y);
+                buf.write_f32(angles.z);
+                buf.write_f32(velocity.x);
+                buf.write_f32(velocity.y);
+                buf.write_f32(velocity.z);
             }
-            ServerEvent::PlayerSpawn { client_index, name, position } => {
+            ServerEvent::PlayerSpawn { client_index, name, position, angles } => {
                 let buf = pk.buf_mut();
                 buf.write_u32(*client_index);
                 buf.write_f32(position.x);
                 buf.write_f32(position.y);
                 buf.write_f32(position.z);
+                buf.write_f32(angles.x);
+                buf.write_f32(angles.y);
+                buf.write_f32(angles.z);
                 buf.write_string(name);
             },
             ServerEvent::Disconnect { client_index, reason } => {
@@ -80,18 +89,33 @@ impl PacketSerialize for ServerEvent {
                 trace!("reading 0x2: Server Move");
                 Ok(ServerEvent::Move {
                     client_index: buf.read_u32(),
-                    position: Position::new(
+                    position: Vector3::new(
                         buf.read_f32(),
                         buf.read_f32(),
                         buf.read_f32()
-                    )
+                    ),
+                    angles: Vector3::new(
+                        buf.read_f32(),
+                        buf.read_f32(),
+                        buf.read_f32()
+                    ),
+                    velocity: Vector3::new(
+                        buf.read_f32(),
+                        buf.read_f32(),
+                        buf.read_f32()
+                    ),
                 })
             },
             0x3 => {
                 trace!("reading 0x3: Server Player Spawn");
                 Ok(ServerEvent::PlayerSpawn {
                     client_index: buf.read_u32(),
-                    position: Position::new(
+                    position: Vector3::new(
+                        buf.read_f32(),
+                        buf.read_f32(),
+                        buf.read_f32()
+                    ),
+                    angles: Vector3::new(
                         buf.read_f32(),
                         buf.read_f32(),
                         buf.read_f32()

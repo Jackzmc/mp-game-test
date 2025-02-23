@@ -1,7 +1,11 @@
-use log::trace;
+use log::{debug, trace};
 use crate::buffer::BitBuffer;
 use std::fmt::Write;
+use std::io;
 use std::time::{SystemTime, UNIX_EPOCH};
+use anyhow::anyhow;
+use zstd::DEFAULT_COMPRESSION_LEVEL;
+use zstd::stream::copy_encode;
 use crate::unix_timestamp;
 
 pub struct PacketBuilder {
@@ -10,7 +14,7 @@ pub struct PacketBuilder {
 
 impl PacketBuilder {
     pub fn new(packet_type: u16) -> Self {
-        let mut buf = BitBuffer::new(PACKET_HEADER_SIZE, None);
+        let mut buf = BitBuffer::with_capacity(PACKET_HEADER_SIZE);
         buf.write_i32(-1); // length, filled later
         buf.write_i16(packet_type as i16);
         buf.write_u32(unix_timestamp());
@@ -46,7 +50,8 @@ impl PacketBuilder {
 
     pub fn finalize(mut self) -> Packet {
         let len = self.buf.len() - PACKET_HEADER_SIZE; // subtract the payload length + payload type fields
-        self.buf.write_i32_at(0x0, len as i32); // write the payload length
+        self.buf.write_u32_at(0x0, len as u32); // write the payload length
+        trace!("finalize. buflen={} bufcursor={}", self.buf.len(), self.buf.offset_pos());
         Packet::new(self.buf)
     }
 }
@@ -60,20 +65,44 @@ pub struct Packet {
 
 impl Packet {
     pub fn new<B: Into<BitBuffer>>(vec: B) -> Self  where BitBuffer: From<B>  {
-        let mut buf = BitBuffer::from(vec);
+        let buf = BitBuffer::from(vec);
         Self {
-            buf: buf
+            buf
         }
     }
 
+    pub fn try_from<B: Into<BitBuffer>>(buf: B) -> Result<Self, anyhow::Error> where BitBuffer: From<B> {
+        let buf: BitBuffer = buf.try_into()?;
+        if buf.len() <= PACKET_HEADER_SIZE {
+            return Err(anyhow!("packet len ({}) is smaller than header size ({})", buf.len(), PACKET_HEADER_SIZE));
+        }
+        let pk = Self { buf };
+        let py_len = pk.payload_len();
+        if py_len == 0 {
+            return Err(anyhow!("payload length is invalid (0)"))
+        } else if pk.buf.len() < py_len as usize {
+            return Err(anyhow!("buffer length too small ({}) for payload ({})", pk.buf.len(), py_len));
+        }
+        Ok(pk)
+    }
+
+    pub fn try_decompress_from_slice(slice: &[u8]) -> anyhow::Result<Self> {
+        trace!("len = {}", slice.len() * 2);
+        let vec = zstd::bulk::decompress(slice, slice.len() * 2)?;
+        trace!("vec_len={} cap={} ", vec.len(), vec.capacity());
+        Self::try_from(vec)
+    }
+
     pub fn is_valid(&self) -> bool {
+        trace!("buf len = {}\tpayload len = {}", self.buf.len(), self.payload_len());
         self.buf.len() > PACKET_HEADER_SIZE && self.payload_len() > 0 && self.buf.len() >= PACKET_HEADER_SIZE + self.payload_len() as usize
         // TODO: check packet_type?
     }
 
     // The length of the packet
     pub fn payload_len(&self) -> u32 {
-        let py_len = self.buf.peek_i32_at(0) as u32;
+        let py_len = self.buf.peek_u32_at(0);
+        // assert!(self.buf_len() >= py_len, "payload len exceeds buffer len (invalid value?)");
         // assert_eq!(pk_len + 4, self.buf.len() as u32, "packet len record != buffer len");
         py_len
     }
@@ -112,7 +141,7 @@ impl Packet {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        self.buf.as_slice()
+        self.buf.as_bytes()
     }
 
     pub fn payload_buf(&self) -> BitBuffer {
@@ -134,6 +163,10 @@ impl Packet {
             write!(s, "{:02X}", payload_buf.peek_u8_at(i)).unwrap();
         }
         s
+    }
+
+    pub fn compress(&self) -> std::io::Result<Vec<u8>> {
+        zstd::bulk::compress(self.buf.as_bytes(), DEFAULT_COMPRESSION_LEVEL)
     }
 }
 

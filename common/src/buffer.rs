@@ -1,39 +1,35 @@
+use std::fmt::Write;
 use std::ffi::{CStr, FromBytesUntilNulError};
 use std::fmt::{Debug, Formatter};
-use std::io::{Cursor};
+use std::io;
+use std::io::{Cursor, Read, Write as OtherWrite};
 use std::ops::Range;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use log::trace;
+use zstd::DEFAULT_COMPRESSION_LEVEL;
+use zstd::zstd_safe::CParameter::CompressionLevel;
 use crate::packet::Packet;
-use std::fmt::Write;
 
 #[derive(Clone)]
 pub struct BitBuffer {
-    cursor: usize,
+    current_offset: usize,
     // offset: usize, // prob can just use vec.length but for now it works
     vec: Vec<u8>
 }
 
 impl BitBuffer {
-    pub fn new(size: usize, init_len: Option<usize>) -> Self {
-        let mut vec = Vec::with_capacity(size);
-        if let Some(len) = init_len {
-            unsafe { vec.set_len(len); }
-        }
+    pub fn with_capacity(capacity: usize) -> Self {
+        let mut vec = Vec::with_capacity(capacity);
         Self {
-            cursor: 0,
+            current_offset: 0,
             vec
         }
     }
-
 
     fn _buf_cursor(&self, offset: usize) -> Cursor<&Vec<u8>> {
         let mut c = Cursor::new(&self.vec);
         c.set_position(offset as u64);
         c
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        self.vec.as_slice()
     }
 
     pub fn into_vec(self) -> Vec<u8> {
@@ -45,14 +41,14 @@ impl BitBuffer {
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        &self.vec[0..self.cursor]
+        &self.vec[0..self.current_offset]
     }
 
-    pub fn set_cursor(&mut self, offset: usize) -> Result<(), String>{
+    pub fn set_offset_pos(&mut self, offset: usize) -> Result<(), String>{
         if offset > self.vec.capacity() {
             return Err(format!("offset {}, is greater than capacity {}", offset, self.vec.capacity()).to_string())
         }
-        self.cursor = offset;
+        self.current_offset = offset;
         Ok(())
     }
 
@@ -64,97 +60,129 @@ impl BitBuffer {
         Ok(())
     }
 
+    /// Reserves more space if given offset and length exceeds vec
+    fn try_expand(&mut self, offset: usize, len: usize)  {
+        if offset + len > self.vec.len() {
+            self.vec.resize(offset + len, 0);
+        }
+    }
+
     pub fn write_i8(&mut self, value: i8) {
-        self.vec.push(value as u8);
-        self.cursor += 1;
+        self.write_i8_at(self.current_offset, value);
+        self.current_offset += 1;
     }
 
     pub fn write_i8_at(&mut self, offset: usize, value: i8) {
+        self.try_expand(offset, 1);
         self.vec[offset] = value as u8;
     }
 
     pub fn write_u8(&mut self, value: u8) {
-        self.vec.push(value);
-        self.cursor += 1;
+        self.write_u8_at(self.current_offset, value);
+        self.current_offset += 1;
     }
 
-    pub fn write_u8_at(&mut self, offset: usize, value: u8) {
+    /// Does not call try_expand
+    pub fn write_u8_at_unchecked(&mut self, offset: usize, value: u8) {
         self.vec[offset] = value;
     }
 
+    pub fn write_u8_at(&mut self, offset: usize, value: u8) {
+        self.try_expand(offset, 1);
+        self.write_u8_at_unchecked(offset, value);
+    }
+
     pub fn write_i16(&mut self, value: i16) {
-        self.vec.write_i16::<LittleEndian>(value).unwrap();
+        self.write_i16_at(self.current_offset, value);
+        self.current_offset += 2;
     }
 
     pub fn write_i16_at(&mut self, mut offset: usize, value: i16) {
+        self.try_expand(offset, 2);
         for b in value.to_le_bytes() {
-            self.write_i8_at(offset, b as i8);
+            self.write_u8_at_unchecked(offset, b);
             offset += 1;
         }
     }
 
     pub fn write_u16(&mut self, value: u16) {
-        self.vec.write_u16::<LittleEndian>(value).unwrap();
+        self.write_u16_at(self.current_offset, value);
+        self.current_offset += 2;
     }
 
     pub fn write_u16_at(&mut self, mut offset: usize, value: u16) {
-        self.vec.reserve(2);
+        self.try_expand(offset, 2);
         for b in value.to_le_bytes() {
-            self.write_u8_at(offset, b);
+            self.write_u8_at_unchecked(offset, b);
             offset += 1;
         }
     }
 
     pub fn write_i32(&mut self, value: i32) {
-        self.vec.write_i32::<LittleEndian>(value).unwrap();
+        self.write_i32_at(self.current_offset, value);
+        self.current_offset += 4;
     }
 
     pub fn write_i32_at(&mut self, mut offset: usize, value: i32) {
-        self.vec.reserve(4);
+        self.try_expand(offset, 4);
         for b in value.to_le_bytes() {
-            self.write_i8_at(offset, b as i8);
+            self.write_u8_at_unchecked(offset, b);
             offset += 1;
         }
     }
 
     pub fn write_u32(&mut self, value: u32) {
-        self.vec.write_u32::<LittleEndian>(value).unwrap();
+        self.write_u32_at(self.current_offset, value);
+        self.current_offset += 4;
     }
 
     pub fn write_u32_at(&mut self, mut offset: usize, value: u32) {
-        self.vec.reserve(4);
+        self.try_expand(offset, 4);
         for b in value.to_le_bytes() {
-            self.write_i8_at(offset, b as i8);
+            self.write_u8_at_unchecked(offset, b);
             offset += 1;
         }
     }
 
     pub fn write_f32(&mut self, value: f32) {
-        self.vec.write_f32::<LittleEndian>(value).unwrap();
+        self.write_f32_at(self.current_offset, value);
+        self.current_offset += 4;
     }
 
     pub fn write_f32_at(&mut self, mut offset: usize, value: f32) {
-        self.vec.reserve(4);
+        self.try_expand(offset, 4);
         for b in value.to_le_bytes() {
-            self.write_i8_at(offset, b as i8);
+            self.write_u8_at_unchecked(offset, b);
             offset += 1;
         }
     }
 
-    pub fn write_string(&mut self, str: &str) {
-        self.vec.reserve(str.len() + 1);
-        for b in str.bytes() {
-            self.write_i8(b as i8);
+    pub fn write_f32_vec(&mut self, slice: Vec<f32>) {
+        for val in slice {
+            self.write_f32(val);
         }
-        self.write_i8(0x0);
+    }
+
+    pub fn write_string(&mut self, str: &str) {
+        self.write_string_at(self.current_offset, str);
+        self.current_offset += str.len() + 1;
+    }
+
+    pub fn write_string_at(&mut self, mut offset: usize, str: &str) {
+        self.try_expand(offset, str.len() + 1);
+        for b in str.bytes() {
+            self.write_u8_at_unchecked(offset, b);
+            offset += 1;
+        }
+        self.write_u8_at_unchecked(offset, 0x0);
     }
 
     pub fn len(&self) -> usize {
         self.vec.len()
     }
 
-    pub fn cursor(&self) -> usize {
-        self.cursor
+    pub fn offset_pos(&self) -> usize {
+        self.current_offset
     }
 
     pub fn max_size(&self) -> usize {
@@ -162,12 +190,12 @@ impl BitBuffer {
     }
 
     pub fn can_read(&self) -> bool {
-        self.cursor < self.vec.len()
+        self.current_offset < self.vec.len()
     }
 
     pub fn read_i8(&mut self) -> i8 {
-        let v = self.peek_i8_at(self.cursor);
-        self.cursor += 1;
+        let v = self.peek_i8_at(self.current_offset);
+        self.current_offset += 1;
         v
     }
 
@@ -176,8 +204,8 @@ impl BitBuffer {
     }
 
     pub fn read_u8(&mut self) -> u8 {
-        let v = self.peek_u8_at(self.cursor);
-        self.cursor += 1;
+        let v = self.peek_u8_at(self.current_offset);
+        self.current_offset += 1;
         v
     }
 
@@ -186,8 +214,8 @@ impl BitBuffer {
     }
 
     pub fn read_i16(&mut self) -> i16 {
-        let val = self.peek_i16_at(self.cursor);
-        self.cursor += 2;
+        let val = self.peek_i16_at(self.current_offset);
+        self.current_offset += 2;
         val
     }
 
@@ -200,14 +228,14 @@ impl BitBuffer {
     }
 
     pub fn read_u16(&mut self) -> u16 {
-        let val = self.peek_u16_at(self.cursor);
-        self.cursor += 2;
+        let val = self.peek_u16_at(self.current_offset);
+        self.current_offset += 2;
         val
     }
 
     pub fn read_i32(&mut self) -> i32 {
-        let val = self.peek_i32_at(self.cursor);
-        self.cursor += 4;
+        let val = self.peek_i32_at(self.current_offset);
+        self.current_offset += 4;
         val
     }
 
@@ -216,8 +244,8 @@ impl BitBuffer {
     }
 
     pub fn read_u32(&mut self) -> u32 {
-        let val = self.peek_u32_at(self.cursor);
-        self.cursor += 4;
+        let val = self.peek_u32_at(self.current_offset);
+        self.current_offset += 4;
         val
     }
 
@@ -226,8 +254,8 @@ impl BitBuffer {
     }
 
     pub fn read_f32(&mut self) -> f32 {
-        let val = self.peek_f32_at(self.cursor);
-        self.cursor += 4;
+        let val = self.peek_f32_at(self.current_offset);
+        self.current_offset += 4;
         val
     }
 
@@ -235,8 +263,16 @@ impl BitBuffer {
         self._buf_cursor(offset).read_f32::<LittleEndian>().unwrap()
     }
 
+    pub fn read_f32_vec(&mut self, count: usize) -> Vec<f32> {
+        let mut vec = Vec::with_capacity(count);
+        for _ in 0..count {
+            vec.push(self.read_f32());
+        }
+        vec
+    }
+
     pub fn read_string(&mut self) -> Result<String, FromBytesUntilNulError> {
-        self.peek_string_at(self.cursor)
+        self.peek_string_at(self.current_offset)
     }
 
     pub fn peek_string_at(&mut self, offset: usize) -> Result<String, FromBytesUntilNulError> {
@@ -273,6 +309,12 @@ impl BitBuffer {
     }
 }
 
+impl Read for BitBuffer {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.vec.write(buf)
+    }
+}
+
 impl Debug for BitBuffer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f,"[{}]0x", self.vec.len())?;
@@ -286,7 +328,7 @@ impl Debug for BitBuffer {
 impl From<Vec<u8>> for BitBuffer {
     fn from(vec: Vec<u8>) -> Self {
         Self {
-            cursor: 0,
+            current_offset: 0,
             vec
         }
     }
