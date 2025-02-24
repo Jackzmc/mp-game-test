@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 use log::{debug, error, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
-use mp_game_test_common::packet::{Packet, PACKET_HEADER_SIZE};
+use mp_game_test_common::packet::{Packet};
 use mp_game_test_common::{NetDirection, NetStat, PacketSerialize, PACKET_PROTOCOL_VERSION};
 use mp_game_test_common::events_server::ServerEvent;
 
@@ -137,15 +137,11 @@ pub fn network_recv_thread(end_signal: Receiver<()>, socket: UdpSocket, mut even
                     let pk = match Packet::try_decompress_from_slice(buf.as_slice()) {
                         Ok(pk) => pk,
                         Err(e) => {
-                            warn!("[net] dropping packet: decompression failed: {}", e);
+                            warn!("[net] dropping bad packet: {}", e);
                             continue;
                         }
                     };
-                    trace!("[net] IN n={} {}", n, &pk.as_hex_str());
-                    if !pk.is_valid() {
-                        trace!("[net] INVALID pk, dropping");
-                        continue;
-                    }
+                    trace!("[net] IN n={} {}", n, pk.as_hex_str());
                     net_stat.inc_pk_count(NetDirection::In);
 
                     // ACK any seq numbers
@@ -201,9 +197,7 @@ pub fn network_send_thread(socket: UdpSocket, mut transmit_recv: Receiver<Packet
         // Unlike recv_thread, when we quit, we send a disconnect packet, so this shouldn't block
         if let Ok(pk) = transmit_recv.recv() {
             let bytes = pk.compress().unwrap();
-            trace!("cursor={}", pk.buf().offset_pos());
             trace!("[net] OUT len=({}uncomp,{}comp) py_len={} {}", pk.buf_len(), bytes.len(), pk.payload_len(), pk.as_hex_str());
-            debug!("{:x?}", bytes);
             socket.send(&bytes).unwrap();
             net_stat.inc_pk_count(NetDirection::Out);
             net_stat.mark_activity(NetDirection::Out);

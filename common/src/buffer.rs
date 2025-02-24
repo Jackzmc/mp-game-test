@@ -32,14 +32,6 @@ impl BitBuffer {
         c
     }
 
-    pub fn into_vec(self) -> Vec<u8> {
-        self.vec
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.vec.as_mut_slice()
-    }
-
     pub fn as_bytes(&self) -> &[u8] {
         &self.vec[0..self.current_offset]
     }
@@ -49,14 +41,6 @@ impl BitBuffer {
             return Err(format!("offset {}, is greater than capacity {}", offset, self.vec.capacity()).to_string())
         }
         self.current_offset = offset;
-        Ok(())
-    }
-
-    pub fn set_len(&mut self, len: usize) -> Result<(), String> {
-        if len > self.vec.capacity() {
-            return Err(format!("len {}, is greater than capacity {}", len, self.vec.capacity()).to_string())
-        }
-        unsafe { self.vec.set_len(len); }
         Ok(())
     }
 
@@ -276,7 +260,6 @@ impl BitBuffer {
     }
 
     pub fn peek_string_at(&mut self, offset: usize) -> Result<String, FromBytesUntilNulError> {
-        println!("{:?}", &self.vec[offset..self.len()]);
         let cstr = CStr::from_bytes_until_nul(&self.vec[offset..self.len()])?;
         Ok(String::from_utf8_lossy(cstr.to_bytes()).to_string())
     }

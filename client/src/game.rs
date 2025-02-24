@@ -111,6 +111,7 @@ impl GameInstance {
             actions: self.actions,
             angles: player.angles,
         };
+        // TODO: throttle to ~100ms? (config by some lerp cvar?)
         self.send(&event)
     }
 
@@ -118,6 +119,7 @@ impl GameInstance {
         let mut pk = event.to_packet_builder()
             .with_auth_id(self.auth_id.unwrap_or(0));
         assert!(event.get_packet_type() == 0x1 || self.auth_id.is_some(), "non-login event {:?} but no auth id {:?}", event, self.auth_id);
+        debug!("sending event {:?}", event);
         self.net().send(pk.finalize())
     }
 

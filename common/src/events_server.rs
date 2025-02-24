@@ -12,20 +12,12 @@ pub enum ServerEvent {
     Disconnect { client_index: u32, reason: String },
 }
 impl ServerEvent {
-    pub fn get_packet_type(&self) -> u16 {
+    pub fn get_packet_type(&self) -> u8 {
         match self {
             ServerEvent::Login { .. } => 0x1,
             ServerEvent::Move { .. } => 0x2,
             ServerEvent::PlayerSpawn { .. } => 0x3,
             ServerEvent::Disconnect { .. } => 0x4,
-        }
-    }
-    pub fn is_reliable(&self) -> bool {
-        match self {
-            ServerEvent::Login { .. } => true,
-            ServerEvent::PlayerSpawn { .. } => true,
-            ServerEvent::Move { .. } => false,
-            ServerEvent::Disconnect { .. } => true,
         }
     }
 }

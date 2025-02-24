@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use log::{debug, error, info, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
-use mp_game_test_common::packet::{Packet, PACKET_HEADER_SIZE};
+use mp_game_test_common::packet::{Packet};
 use mp_game_test_common::{NetContainer, NetDirection, NetStat, PacketSerialize, ACK_TIMEOUT_REPLY, PACKET_PROTOCOL_VERSION};
 use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::network::{Network, ReliableQueue};
@@ -144,7 +144,6 @@ pub fn network_recv_thread(
                 buf.truncate(n);
                 net_stat.mark_activity(NetDirection::In);
                 if n > 0 {
-                    debug!("{:?}", &buf[0..n]);
                     let pk = match Packet::try_decompress_from_slice(buf.as_slice()) {
                         Ok(pk) => pk,
                         Err(e) => {
@@ -152,7 +151,6 @@ pub fn network_recv_thread(
                             continue;
                         }
                     };
-                    debug!("len={} cur={}", pk.buf().len(), pk.buf().offset_pos());
                     trace!("[net] IN n={} {}", n, pk.as_hex_str());
                     net_stat.inc_pk_count(NetDirection::Out);
                     match ClientEvent::from_packet(&pk) {

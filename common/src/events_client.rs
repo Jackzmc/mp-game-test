@@ -12,7 +12,7 @@ pub enum ClientEvent {
     Disconnect { reason: String},
 }
 impl ClientEvent {
-    pub fn get_packet_type(&self) -> u16 {
+    pub fn get_packet_type(&self) -> u8 {
         match self {
             ClientEvent::Ack { .. }  => 0x0,
             ClientEvent::Login { .. } => 0x1,
