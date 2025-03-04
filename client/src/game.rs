@@ -6,6 +6,7 @@ use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::game::{Action, CommonGameInstance, PlayerData};
 use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::{PacketSerialize, PACKET_PROTOCOL_VERSION};
+use mp_game_test_common::def::Vector3;
 use crate::network::NetClient;
 
 pub struct GameInstance {
@@ -105,9 +106,12 @@ impl GameInstance {
 
     pub fn set_action(&mut self, action: Action, value: bool) -> Result<(), String> {
         self.actions.set(action, value);
+        let player = self.player().ok_or(format!("player not active"))?;
         let event = ClientEvent::PerformAction {
-            actions: self.actions
+            actions: self.actions,
+            angles: player.angles,
         };
+        // TODO: throttle to ~100ms? (config by some lerp cvar?)
         self.send(&event)
     }
 
@@ -115,8 +119,8 @@ impl GameInstance {
         let mut pk = event.to_packet_builder()
             .with_auth_id(self.auth_id.unwrap_or(0));
         assert!(event.get_packet_type() == 0x1 || self.auth_id.is_some(), "non-login event {:?} but no auth id {:?}", event, self.auth_id);
-        let pk = pk.finalize();
-        self.net().send(pk)
+        debug!("sending event {:?}", event);
+        self.net().send(pk.finalize())
     }
 
     pub fn process_event(&mut self, event: ServerEvent) {
@@ -132,15 +136,17 @@ impl GameInstance {
                 }
                 self._on_login(client_id, auth_id);
             }
-            ServerEvent::PlayerSpawn { client_index: client_id, name, position } => {
+            ServerEvent::PlayerSpawn { client_index: client_id, name, position, angles } => {
                 trace!("new player \"{}\" client id {}", name, client_id);
-                let player = PlayerData::new(client_id, name, position);
+                let player = PlayerData::new(client_id, name, position, angles);
                 self.game.set_player(client_id, Some(player));
             }
-            ServerEvent::Move { client_index: client_id, position } => {
+            ServerEvent::Move { client_index: client_id, position, angles, velocity } => {
                 if let Some(player) = self.game.get_player_mut(client_id) {
                     trace!("move player {} | {:?} -> {:?}", client_id, player.position, position);
                     player.position = position;
+                    player.angles = angles;
+                    // player.velocity = velocity;
                 }
             }
             ServerEvent::Disconnect { client_index, reason } => {

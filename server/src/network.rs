@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use log::{debug, error, info, trace, warn};
 use mp_game_test_common::events_client::ClientEvent;
-use mp_game_test_common::packet::{Packet, PACKET_HEADER_SIZE};
+use mp_game_test_common::packet::{Packet};
 use mp_game_test_common::{NetContainer, NetDirection, NetStat, PacketSerialize, ACK_TIMEOUT_REPLY, PACKET_PROTOCOL_VERSION};
 use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::network::{Network, ReliableQueue};
@@ -140,14 +140,18 @@ pub fn network_recv_thread(
         buf.resize(2048, 0);
         match socket.recv_from(&mut buf) {
             Ok((n, addr)) => {
+                trace!("recv {n} bytes, buf len = {}", buf.len());
+                buf.truncate(n);
                 net_stat.mark_activity(NetDirection::In);
                 if n > 0 {
-                    let pk = Packet::from(buf.as_slice());
-                    trace!("IN n={} {}", n, pk.as_hex_str());
-                    // TODO: make this process ACK instead?
-                    if !pk.is_valid() {
-                        continue;
-                    }
+                    let pk = match Packet::try_decompress_from_slice(buf.as_slice()) {
+                        Ok(pk) => pk,
+                        Err(e) => {
+                            warn!("[net] dropping bad packet: {}", e);
+                            continue;
+                        }
+                    };
+                    trace!("[net] IN n={} {}", n, pk.as_hex_str());
                     net_stat.inc_pk_count(NetDirection::Out);
                     match ClientEvent::from_packet(&pk) {
                         Ok(ev) => {
@@ -202,13 +206,15 @@ pub fn network_send_thread(
             match out {
                 OutPacket::Multiple(pk, addr_list) => {
                     trace!("OUT addr_list={:?} pk_len={} py_len={} {}", addr_list, pk.buf_len(), pk.payload_len(), pk.as_hex_str());
+                    let buf = pk.compress().expect("compress failed");
                     for addr in addr_list {
-                        socket.send_to(pk.as_slice(), addr).unwrap();
+                        socket.send_to(&buf, addr).unwrap();
                     }
                 },
                 OutPacket::Single(pk, addr) => {
                     trace!("OUT addr={} pk_len={} py_len={} {}", addr, pk.buf_len(), pk.payload_len(), pk.as_hex_str());
-                    socket.send_to(pk.as_slice(), addr).unwrap();
+                    let buf = pk.compress().expect("compress failed");
+                    socket.send_to(&buf, addr).unwrap();
                 }
             }
             net_stat.inc_pk_count(NetDirection::Out);

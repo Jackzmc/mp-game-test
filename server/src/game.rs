@@ -15,7 +15,7 @@ use mp_game_test_common::game::{Action, CommonGameInstance, PlayerData};
 use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::packet::{Packet, PacketBuilder};
 use mp_game_test_common::{unix_timestamp, PacketSerialize, PACKET_PROTOCOL_VERSION};
-use mp_game_test_common::def::{Position, MAX_PLAYERS};
+use mp_game_test_common::def::{Vector3, MAX_PLAYERS};
 use mp_game_test_common::events_server::ServerEvent::Disconnect;
 use mp_game_test_common::network::Network;
 use crate::cmds::{CmdFlag, CommandArgs, ServerCommand};
@@ -234,6 +234,8 @@ impl GameInstance {
                     let move_event = ServerEvent::Move {
                         client_index: player.client_index,
                         position: player.position,
+                        angles: player.angles,
+                        velocity: Vector3::zero()
                     };
                     self.broadcast(move_event);
                 }
@@ -243,7 +245,7 @@ impl GameInstance {
         self.tick_count += 1;
         if self.tick_count == self.tick_rate {
             let pk_count = self.net.pks_per_interval();
-            debug!("tick summary. ticks={} pk_in={}/s pk_out={}/s clients={}", self.tick_count, pk_count.rx, pk_count.tx, client_count);
+            // debug!("tick summary. ticks={} pk_in={}/s pk_out={}/s clients={}", self.tick_count, pk_count.rx, pk_count.tx, client_count);
             self.tick_count = 0;
             // If we haven't seen any network activity then we can sleep
             if !self.net.stat().has_activity_within(Duration::from_millis(30_000)) && self.game.player_count() == 0 {
@@ -267,7 +269,7 @@ impl GameInstance {
 
     pub fn remove_player(&mut self, client_id: &ClientId) {
         if let Some(index) = self.get_client_index(client_id) {
-            debug!("disconnecting client index {}", index);
+            debug!("disconnecting client index {}.", index);
             self.client_data[index as usize] = None;
             self.game.players[index as usize] = None;
             // TODO: send disconnect packet
@@ -283,7 +285,7 @@ impl GameInstance {
         // Generate an unique auth id that should be hard to guess
         let auth_id: u32 = random();
         trace!("auth_id={} for new client (id={}) (ip={:?}) (name={})", auth_id, client_index, addr, name);
-        let player = PlayerData::new(client_index, name, Position::zero());
+        let player = PlayerData::new(client_index, name, Vector3::zero(), Vector3::zero());
 
         self.game.set_player(client_index, Some(player));
 
@@ -518,7 +520,7 @@ impl GameInstance {
                 // Handled elsewhere
                 ClientEvent::Ack {..} | ClientEvent::Login {..} => unreachable!(),
 
-                ClientEvent::PerformAction { actions } => {
+                ClientEvent::PerformAction { actions, angles } => {
                     trace!("now={} pk.timestamp={} last_timestamp={}", unix_timestamp(), packet.timestamp(), client.last_timestamp);
                     if client.last_timestamp > packet.timestamp() {
                         debug!("discarding packet (last timestamp: {}) (pk timestamp: {})", client.last_timestamp, packet.timestamp());
@@ -527,6 +529,7 @@ impl GameInstance {
                     client.last_timestamp = packet.timestamp();
                     trace!("got player id={}", player.client_index);
                     player.actions = actions;
+                    player.angles = angles;
                 },
                 ClientEvent::Disconnect { reason} => {
                     trace!("client disconnect (index={}) (reason={})", player.client_index, reason);
