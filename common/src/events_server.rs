@@ -10,6 +10,7 @@ pub enum ServerEvent {
     Move { client_index: u32, position: Vector3, angles: Vector3, velocity: Vector3 }, // 0x2
     PlayerSpawn { client_index: u32, name: String, position: Vector3, angles: Vector3 }, //0x3,
     Disconnect { client_index: u32, reason: String },
+    CommandResult { id: u32, result: bool }
 }
 impl ServerEvent {
     pub fn get_packet_type(&self) -> u8 {
@@ -18,6 +19,7 @@ impl ServerEvent {
             ServerEvent::Move { .. } => 0x2,
             ServerEvent::PlayerSpawn { .. } => 0x3,
             ServerEvent::Disconnect { .. } => 0x4,
+            ServerEvent::CommandResult { .. } => 0x5,
         }
     }
 }
@@ -59,6 +61,11 @@ impl PacketSerialize for ServerEvent {
                 let buf = pk.buf_mut();
                 buf.write_u32(*client_index);
                 buf.write_string(reason)
+            },
+            ServerEvent::CommandResult { id, result } => {
+                let buf = pk.buf_mut();
+                buf.write_u32(*id);
+                buf.write_u8(result.then(|| 1).unwrap_or(0));
             }
         }
         pk
@@ -117,12 +124,19 @@ impl PacketSerialize for ServerEvent {
                 })
             },
             0x4 => {
-                trace!("reading 0x4: Disconnect");
+                trace!("reading 0x4: Server Disconnect");
                 Ok(ServerEvent::Disconnect {
                     client_index: buf.read_u32(),
                     reason: buf.read_string().unwrap()
                 })
             },
+            0x5 => {
+                trace!("reading 0x5: Server CommandResult");
+                Ok(ServerEvent::CommandResult {
+                    id: buf.read_u32(),
+                    result: buf.read_u8() != 0,
+                })
+            }
             _ => {
                 // println!("{:?}", packet.buf());
                 Err(format!("Invalid packet type ({}). packet len={}", pk_type, len))

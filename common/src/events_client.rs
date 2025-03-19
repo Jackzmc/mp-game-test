@@ -10,6 +10,7 @@ pub enum ClientEvent {
     Login { version: u32, name: String }, // 0x0
     PerformAction { actions: Action, angles: Vector3 }, // ox1
     Disconnect { reason: String},
+    Command { command: String, id: u32 }
 }
 impl ClientEvent {
     pub fn get_packet_type(&self) -> u8 {
@@ -17,7 +18,8 @@ impl ClientEvent {
             ClientEvent::Ack { .. }  => 0x0,
             ClientEvent::Login { .. } => 0x1,
             ClientEvent::PerformAction { .. } => 0x2,
-            ClientEvent::Disconnect { .. } => 0x3
+            ClientEvent::Disconnect { .. } => 0x3,
+            ClientEvent::Command { .. } => 0x4,
         }
     }
 }
@@ -43,6 +45,11 @@ impl PacketSerialize for ClientEvent {
             ClientEvent::Disconnect { reason } => {
                 let buf = pk.buf_mut();
                 buf.write_string(reason);
+            },
+            ClientEvent::Command { command, id } => {
+                let buf = pk.buf_mut();
+                buf.write_u32(*id);
+                buf.write_string(command);
             }
         }
         pk
@@ -79,6 +86,13 @@ impl PacketSerialize for ClientEvent {
                     reason: buf.read_string().unwrap()
                 })
             },
+            0x4 => {
+                trace!("reading 0x4: Client Command");
+                Ok(ClientEvent::Command {
+                    id: buf.read_u32(),
+                    command: buf.read_string().unwrap()
+                })
+            }
             _ => {
                 // println!("{:?}", packet.buf());
                 Err(format!("Invalid packet type ({}). packet len={}", pk_type, len))
