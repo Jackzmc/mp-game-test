@@ -1,12 +1,17 @@
+mod update;
+mod render;
+
 use std::net::SocketAddr;
 use log::{debug, trace, warn};
 use macroquad::camera::Camera3D;
+use macroquad::input::{is_key_pressed, is_key_released, KeyCode};
 use macroquad::math::Vec3;
 use mp_game_test_common::events_client::ClientEvent;
 use mp_game_test_common::game::{Action, CommonGameInstance, PlayerData};
 use mp_game_test_common::events_server::ServerEvent;
 use mp_game_test_common::{PacketSerialize, PACKET_PROTOCOL_VERSION};
 use mp_game_test_common::def::Vector3;
+use crate::{ActionResult, FpsCounter};
 use crate::network::NetClient;
 
 pub struct GameInstance {
@@ -16,7 +21,9 @@ pub struct GameInstance {
     pub local_player: LocalPlayer,
     client_id: Option<u32>,
     auth_id: Option<u32>,
-    actions: Action
+    actions: Action,
+
+    pub fps_calc: FpsCounter,
 }
 #[derive(Default)]
 pub struct GameCamera {
@@ -41,7 +48,9 @@ impl GameInstance {
             net: None,
             client_id: None,
             auth_id: None,
-            actions: Action::empty()
+            actions: Action::empty(),
+
+            fps_calc: FpsCounter::new()
         }
     }
     pub fn connect(&mut self, addr: SocketAddr, name: String) -> Result<(), String> {
@@ -104,7 +113,8 @@ impl GameInstance {
         self.actions.contains(action)
     }
 
-    pub fn set_action(&mut self, action: Action, value: bool) -> Result<(), String> {
+
+    pub fn update_action(&mut self, action: Action, value: bool) -> Result<(), String> {
         self.actions.set(action, value);
         let player = self.player().ok_or(format!("player not active"))?;
         let event = ClientEvent::PerformAction {

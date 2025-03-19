@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use bitflags::bitflags;
 use int_enum::IntEnum;
 use crate::ClientIndex;
-use crate::def::{Vector3, MAX_PLAYERS};
+use crate::def::{get_direction_vector, Vector3, MAX_PLAYERS};
 use crate::events_server::ServerEvent;
 
 #[derive(Debug)]
@@ -68,31 +68,19 @@ impl PlayerData {
     pub fn process_actions(&mut self) -> bool {
         let mut changed = false;
         if self.actions.contains(Action::Forward) {
-            self.position.y -= 1.0;
-            if self.position.y < 0.0 {
-                self.position.y = 0.0;
-            }
+            self.position.add(&get_direction_vector(&Vector3::new(0.0, 0.1, 0.0), &self.angles));
             changed = true;
         }
         if self.actions.contains(Action::Backward) {
-            self.position.y += 1.0;
-            if self.position.y > 1000.0 {
-                self.position.y = 1000.0;
-            }
+            self.position.add(&get_direction_vector(&Vector3::new(0.0, -0.1, 0.0), &self.angles));
             changed = true;
         }
         if self.actions.contains(Action::Left) {
-            self.position.x += 1.0;
-            if self.position.x < 0.0 {
-                self.position.x = 0.0;
-            }
+            self.position.add(&get_direction_vector(&Vector3::new(0.1, -0.1, 0.0), &self.angles));
             changed = true;
         }
         if self.actions.contains(Action::Right) {
-            self.position.x -= 1.0;
-            if self.position.x > 1000.0 {
-                self.position.x = 1000.0;
-            }
+            self.position.add(&get_direction_vector(&Vector3::new(-0.1, -0.1, 0.0), &self.angles));
             changed = true;
         }
 

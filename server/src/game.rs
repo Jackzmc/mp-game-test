@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::f32::consts::PI;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::{atomic, Arc};
@@ -259,7 +260,7 @@ impl GameInstance {
         // Generate an unique auth id that should be hard to guess
         let auth_id: u32 = random();
         trace!("auth_id={} for new client (id={}) (ip={:?}) (name={})", auth_id, client_index, addr, name);
-        let player = PlayerData::new(client_index, name, Vector3::zero(), Vector3::zero());
+        let player = PlayerData::new(client_index, name, Vector3::zero(), Vector3::new(PI/2.0, 0.0, 0.0));
 
         self.game.set_player(client_index, Some(player));
 

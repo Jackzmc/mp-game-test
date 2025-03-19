@@ -1,6 +1,7 @@
 mod game;
 mod network;
 mod main_menu;
+mod def;
 
 use crate::game::GameInstance;
 use crate::network::NetClient;
@@ -22,6 +23,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use clap::Parser;
 use crate::main_menu::MainMenu;
+use ::rand::SeedableRng;
+use ::rand::prelude::*;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -106,12 +109,9 @@ async fn main() {
         next_frame().await;
     }
     if is_quit_requested() {
-        return std::process::exit(0);
+        std::process::exit(0);
     }
-    let server_ip = main_menu.ip_addr().unwrap();
-    let name = main_menu.name().to_owned();
 
-    let mut pos = Vector3::new(0.0, 0.0, 0.0);
     while !game.is_authenticated() {
         if let Some(event) = game.net_mut().next_event() {
             debug!("[main->login] got event, processing: {:?}", event);
@@ -119,125 +119,26 @@ async fn main() {
         }
     }
     // let mut cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, screen_width(), screen_height()));
-    game.cam.camera.position = vec3(20.0, 20.0, 20.0);
-    debug!("starting draw loop");
+    game.cam.camera.position = vec3(20.0, 20.0, 5.0);
+    game.cam.camera.target = vec3(0.0, 0.0, 0.0);
+    debug!("starting game loop");
     let mut instant: Option<Instant> = None;
-    let mut fps_calc = FpsCounter::new();
     let mut frame: u64 = 0;
     let mut last_mouse_pos = vec2(0.0, 0.0);
     // While connected:?
-    fn draw(time_delta: &Duration, game: &mut GameInstance, fps_calc: &mut FpsCounter, last_mouse_pos: &mut Vec2) {
-        clear_background(WHITE);
-
-        set_camera(&mut game.cam.camera);
-        // draw_grid(20, 1., BLACK, GRAY);
-        draw_rectangle(0.0, 0.0, 50.0, 50.0, GREEN);
-        draw_rectangle(screen_width() - 50.0, 0.0, 50.0, 50.0, GREEN);
-        draw_rectangle(screen_width() - 50.0, screen_height() - 50.0, 50.0, 50.0, GREEN);
-        draw_rectangle(0.0, screen_height() - 50.0, 50.0, 50.0, GREEN);
-
-        draw_plane(vec3(0.0, 0.0, 0.0), vec2(100.0, 100.0), None, LIGHTGRAY);
-        draw_grid(3, 10.0, BLACK, WHITE);
-
-        // TODO: draw players
-        for i in 0..MAX_PLAYERS {
-            if let Some(player) = &game.game.players[i] {
-                Player::draw(Vec3::new(player.position.x, player.position.y, 1.0));
-                // draw_rectangle(pos.x, pos.y, 20.0, 20.0, BLACK);
-                // draw_cube(vec3(player.position.x, player.position.y, 1.0), Vec3::new(1.0, 1.0, 1.0), None, BLACK);
-                // let pos = cam.screen_to_world(Vec2::new(player.position.x, player.position.y));
-                let end = vec3(player.position.x + 0.0, player.position.y + 5.0, 1.0);
-                draw_line_3d(Vec3::new(player.position.x, player.position.y, 1.0), end, ORANGE);
-                draw_text(
-                    &i.to_string(),
-                    player.position.x,
-                    player.position.y,
-                    20.0,
-                    RED,
-                );
-            }
-        }
-
-        // TODO: get player pos mut
-        set_action(game, Action::Forward, KeyCode::W);
-        set_action(game, Action::Backward, KeyCode::S);
-        set_action(game, Action::Left, KeyCode::A);
-        set_action(game, Action::Right, KeyCode::D);
-        if let Some(player) = game.player_mut() {
-            // cam.offset = Vec2::new(player.position.x, player.position.y);
-            // trace!("cam.offset={}", cam.offset);
-
-            if is_mouse_button_down(MouseButton::Left) {
-                let mouse_pos = mouse_position_local();
-                let mouse_delta = mouse_pos - *last_mouse_pos;
-                *last_mouse_pos = mouse_pos;
-                let time_delta = time_delta.as_secs_f32();
-
-                // game.cam.rotation.x += mouse_delta.x * time_delta * 1.0;
-                // game.cam.rotation.y += mouse_delta.y * time_delta * -1.0;
-                // game.cam.rotation.y = clamp(game.cam.rotation.y, -1.5, 1.5);
-
-                set_cursor_grab(true);
-                let pos = vec3(player.position.x, player.position.y, player.position.z);
-                game.cam.set_target(pos);
-            } else {
-                set_cursor_grab(false);
-            }
-        }
-
-        set_default_camera();
-        if let Some(client_id) = game.client_id() {
-            let text = &format!("Connected. Id#{}", client_id);
-            let dim = measure_text(text, None, 20, 1.0);
-            draw_text(
-                text,
-                screen_width() - dim.width - 20.0,
-                20.0,
-                20.0,
-                DARKGRAY,
-            );
-            let activity_time = game.net().stat().activity_time();
-            let (tx, rx) = (activity_time.tx.map(|t| t.elapsed().as_millis().to_string()).unwrap_or("-".to_string()),
-                            activity_time.rx.map(|t| t.elapsed().as_millis().to_string()).unwrap_or("-".to_string()));
-            draw_text(
-                &format!("{} {}", tx, rx),
-                screen_width() - dim.width - 20.0,
-                50.0,
-                20.0,
-                DARKGRAY,
-            );
-        }
-        draw_text(
-            &game.net().process_queue_len().to_string(),
-            20.0,
-            20.0,
-            20.0,
-            DARKGRAY,
-        );
-        draw_text(
-            &format!("{:.0}", fps_calc.average()),
-            40.0,
-            20.0,
-            20.0,
-            DARKGRAY,
-        );
-    }
     while !is_quit_requested() {
         let prev_frame_time = instant.map(|instant| instant.elapsed()); //instant.elapsed();
         instant = Some(Instant::now());
 
         // Check if there's any event to process
-        if let Some(event) = game.net_mut().next_event() {
-            debug!("[main->loop] got event, processing: {:?}", event);
-            game.process_event(event);
-        }
         if let Some(frame_delta) = prev_frame_time {
-            draw(&frame_delta, &mut game, &mut fps_calc, &mut last_mouse_pos);
+            game.update();
         }
+        game.render();
         if frame % 10 == 0 {
             if let Some(prev_frame_time) = prev_frame_time {
                 let fps = 1.0 / prev_frame_time.as_secs_f64();
-                fps_calc.add_fps(fps);
+                game.fps_calc.add_fps(fps);
             }
         }
         frame += 1;
@@ -252,15 +153,19 @@ enum ActionResult {
     None
 }
 
-fn set_action(game: &mut GameInstance, action: Action, key_code: KeyCode) -> ActionResult {
-    if is_key_pressed(key_code) {
-        game.set_action(action, true).ok();
-        ActionResult::Activated
-    } else if game.has_action(action) && is_key_released(key_code) {
-        game.set_action(action, false).ok();
-        ActionResult::Deactivated
-    } else {
-        ActionResult::None
+fn draw_cube_rot(pos: Vec3, rot: Vec3, color: Color) {
+    let u = rot.normalize();
+    let quat = Quat::from_axis_angle(u, 50.0f32.to_radians());
+}
+
+
+
+
+fn get_direction_vector(direction: &Vec3, ang: &Vec3) -> Vec3 {
+    Vec3 {
+        x: direction.x * ang.z.cos() - direction.z * ang.x.cos() * ang.z.sin() - direction.y * ang.x.sin() * ang.z.sin(),
+        y: direction.x * ang.z.sin() + direction.z * ang.x.cos() * ang.z.cos() + direction.y * ang.x.sin() * ang.z.cos(),
+        z: direction.z * ang.x.sin() - direction.y * ang.x.cos(),
     }
 }
 
